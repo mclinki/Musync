@@ -23,6 +23,7 @@ desktop.ini
 .pub/
 build/
 **/doc/api/
+.metadata
 
 # ── Android ──
 **/android/**/gradle-wrapper.jar
@@ -38,8 +39,13 @@ build/
 **/ios/**/*.symlink
 **/ios/Flutter/.last_build_id
 **/ios/Flutter/Flutter.framework
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/Runner/GeneratedPluginRegistrant.h
+**/ios/Runner/GeneratedPluginRegistrant.m
 **/Flutter/Flutter.podspec
 **/macos/Flutter/ephemeral/
+**/macos/Flutter/GeneratedPluginRegistrant.swift
 **/ios/Pods/
 **/macos/Pods/
 

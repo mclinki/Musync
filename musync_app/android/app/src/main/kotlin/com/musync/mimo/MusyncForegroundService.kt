@@ -1,4 +1,4 @@
-package com.musync.musync_mimo
+package com.musync.mimo
 
 import android.app.Notification
 import android.app.NotificationChannel
