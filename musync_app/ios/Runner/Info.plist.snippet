@@ -1,0 +1,31 @@
+<!-- MusyncMIMO iOS Configuration -->
+<!-- Add these keys to your ios/Runner/Info.plist -->
+
+<dict>
+    <!-- Local Network Access (required for mDNS) -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>MusyncMIMO utilise le réseau local pour découvrir et synchroniser les appareils à proximité.</string>
+    
+    <!-- Bonjour Services (required for mDNS discovery) -->
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_musync._tcp</string>
+    </array>
+    
+    <!-- Background Audio -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>audio</string>
+    </array>
+    
+    <!-- Audio Session Category -->
+    <key>AVAudioSessionCategory</key>
+    <string>AVAudioSessionCategoryPlayback</string>
+    
+    <!-- App Transport Security (allow local network) -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+</dict>
