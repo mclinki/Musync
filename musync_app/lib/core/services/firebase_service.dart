@@ -31,10 +31,10 @@ class FirebaseService {
   // ── Getters ──
 
   bool get isInitialized => _initialized;
-  FirebaseAnalytics get analytics => _analytics!;
-  FirebaseCrashlytics get crashlytics => _crashlytics!;
-  FirebaseAuth get auth => _auth!;
-  FirebaseFirestore get firestore => _firestore!;
+  FirebaseAnalytics? get analytics => _analytics;
+  FirebaseCrashlytics? get crashlytics => _crashlytics;
+  FirebaseAuth? get auth => _auth;
+  FirebaseFirestore? get firestore => _firestore;
 
   String? get userId => _auth?.currentUser?.uid;
 

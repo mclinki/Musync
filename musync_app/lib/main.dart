@@ -86,9 +86,9 @@ class MusyncApp extends StatelessWidget {
         },
         // Firebase Analytics observer
         navigatorObservers: <NavigatorObserver>[
-          if (firebaseService.isInitialized)
+          if (firebaseService.isInitialized && firebaseService.analytics != null)
             FirebaseAnalyticsObserver(
-              analytics: firebaseService.analytics,
+              analytics: firebaseService.analytics!,
             ),
         ],
       ),

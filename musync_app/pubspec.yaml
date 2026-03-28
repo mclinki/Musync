@@ -1,6 +1,6 @@
 name: musync_mimo
 description: Synchronize music playback across multiple devices on the same Wi-Fi network.
-version: 0.1.0+1
+version: 0.1.1+2
 publish_to: 'none'
 
 environment:
@@ -16,7 +16,6 @@ dependencies:
 
   # Network
   web_socket_channel: ^3.0.1
-  multicast_dns: ^0.3.2+6
 
   # State management
   flutter_bloc: ^8.1.6

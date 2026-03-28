@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../core/core.dart';
-import '../../../features/player/ui/position_slider.dart';
+import '../../../core/utils/format.dart';
 import '../bloc/discovery_bloc.dart';
 
 /// Screen for discovering and connecting to devices.
@@ -348,120 +348,71 @@ class _DiscoveryView extends StatelessWidget {
         final isPlaying = state.isPlaying;
         final position = state.position;
         final duration = state.duration;
+        final hostName = state.hostDevice?.name ?? 'Hôte';
+        final hostIp = state.hostDevice?.ip ?? '';
+        final syncQuality = state.syncQuality;
+        final syncOffset = state.syncOffsetMs;
+        final fileProgress = state.fileTransferProgress;
+        final connectionDetail = state.connectionDetail;
 
-        return Padding(
-          padding: const EdgeInsets.all(24),
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SizedBox(height: 24),
-              // Status indicator
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.green.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: Colors.green),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.wifi, color: Colors.green, size: 16),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Connecté à l\'hôte',
-                      style: TextStyle(color: Colors.green[700]),
-                    ),
-                  ],
-                ),
+              // ── Connection Status Card ──
+              _ConnectionStatusCard(
+                connectionDetail: connectionDetail,
+                hostName: hostName,
+                hostIp: hostIp,
+                syncQuality: syncQuality,
+                syncOffsetMs: syncOffset,
               ),
 
-              const Spacer(),
-
-              // Track info
-              Container(
-                width: 200,
-                height: 200,
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Icon(
-                  hasTrack ? Icons.music_note : Icons.music_off,
-                  size: 80,
-                  color: Theme.of(context).colorScheme.onPrimaryContainer,
-                ),
-              ),
               const SizedBox(height: 16),
 
-              // Track title
-              Text(
-                hasTrack ? state.currentTrack!.title : 'Aucun morceau',
-                style: Theme.of(context).textTheme.titleLarge,
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              if (hasTrack && state.currentTrack!.artist != null) ...[
-                const SizedBox(height: 4),
-                Text(
-                  state.currentTrack!.artist!,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                ),
-              ],
+              // ── File Transfer Progress ──
+              if (fileProgress != null && fileProgress < 1.0)
+                _FileTransferCard(progress: fileProgress),
 
-              const SizedBox(height: 24),
+              if (fileProgress != null && fileProgress < 1.0)
+                const SizedBox(height: 16),
 
-              // Playback state indicator
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(
-                  color: isPlaying 
-                      ? Theme.of(context).colorScheme.primaryContainer
-                      : Theme.of(context).colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      isPlaying ? Icons.play_arrow : Icons.pause,
-                      size: 20,
-                      color: isPlaying
-                          ? Theme.of(context).colorScheme.onPrimaryContainer
-                          : Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      isPlaying ? 'Lecture en cours' : 'En pause',
-                      style: TextStyle(
-                        color: isPlaying
-                            ? Theme.of(context).colorScheme.onPrimaryContainer
-                            : Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
+              // ── Track Info Card ──
+              _TrackInfoCard(
+                track: state.currentTrack,
+                isPlaying: isPlaying,
+                position: position,
+                duration: duration,
               ),
 
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
 
-              // Position slider (read-only for slave)
+              // ── Playback Controls (read-only for slave) ──
               if (hasTrack && duration != null)
-                PositionSlider(
+                _PlaybackInfoCard(
                   position: position,
                   duration: duration,
-                  onSeek: (_) {}, // Slave cannot seek
+                  isPlaying: isPlaying,
                 )
               else if (hasTrack)
-                // Show indeterminate progress while loading
-                const LinearProgressIndicator(),
+                const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Column(
+                      children: [
+                        LinearProgressIndicator(),
+                        SizedBox(height: 8),
+                        Text('Chargement du morceau...'),
+                      ],
+                    ),
+                  ),
+                ),
 
-              const Spacer(),
+              const SizedBox(height: 16),
 
-              // Volume control
-              _VolumeSlider(
+              // ── Volume Control ──
+              _VolumeCard(
                 onChanged: (value) {
                   sessionManager.audioEngine.setVolume(value);
                 },
@@ -469,19 +420,20 @@ class _DiscoveryView extends StatelessWidget {
 
               const SizedBox(height: 16),
 
-              // Disconnect button
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    context.read<DiscoveryBloc>().add(
-                          const LeaveSessionRequested(),
-                        );
-                  },
-                  icon: const Icon(Icons.link_off),
-                  label: const Text('Se déconnecter'),
+              // ── Disconnect Button ──
+              OutlinedButton.icon(
+                onPressed: () {
+                  context.read<DiscoveryBloc>().add(
+                        const LeaveSessionRequested(),
+                      );
+                },
+                icon: const Icon(Icons.link_off),
+                label: const Text('Se déconnecter'),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
               ),
+
               const SizedBox(height: 24),
             ],
           ),
@@ -601,6 +553,558 @@ class _VolumeSliderState extends State<_VolumeSlider> {
           ),
         ),
       ],
+    );
+  }
+}
+
+// ── New Enhanced Widgets for Guest View ──
+
+class _ConnectionStatusCard extends StatelessWidget {
+  final ConnectionDetail connectionDetail;
+  final String hostName;
+  final String hostIp;
+  final SyncQuality syncQuality;
+  final double syncOffsetMs;
+
+  const _ConnectionStatusCard({
+    required this.connectionDetail,
+    required this.hostName,
+    required this.hostIp,
+    required this.syncQuality,
+    required this.syncOffsetMs,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isConnected = connectionDetail == ConnectionDetail.connected;
+    final isReconnecting = connectionDetail == ConnectionDetail.reconnecting;
+    final isError = connectionDetail == ConnectionDetail.error;
+
+    final statusColor = isError
+        ? Colors.red
+        : isReconnecting
+            ? Colors.orange
+            : isConnected
+                ? Colors.green
+                : Colors.grey;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header row
+            Row(
+              children: [
+                Icon(
+                  isConnected
+                      ? Icons.wifi
+                      : isReconnecting
+                          ? Icons.wifi_find
+                          : isError
+                              ? Icons.wifi_off
+                              : Icons.wifi_tethering,
+                  color: statusColor,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        connectionDetail.label,
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              color: statusColor,
+                              fontWeight: FontWeight.bold,
+                            ),
+                      ),
+                      Text(
+                        'Session avec $hostName',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+                // Sync quality badge
+                if (isConnected)
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: syncQuality.color.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: syncQuality.color, width: 1),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.sync, size: 14, color: syncQuality.color),
+                        const SizedBox(width: 4),
+                        Text(
+                          syncQuality.label,
+                          style: TextStyle(
+                            color: syncQuality.color,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+
+            const Divider(height: 24),
+
+            // Details
+            _InfoRow(
+              icon: Icons.person,
+              label: 'Hôte',
+              value: hostName,
+            ),
+            if (hostIp.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _InfoRow(
+                icon: Icons.router,
+                label: 'IP',
+                value: hostIp,
+                isMono: true,
+              ),
+            ],
+            if (isConnected) ...[
+              const SizedBox(height: 8),
+              _InfoRow(
+                icon: Icons.speed,
+                label: 'Décalage',
+                value: '${syncOffsetMs.toStringAsFixed(1)} ms',
+                valueColor: syncOffsetMs.abs() < 30
+                    ? Colors.green
+                    : syncOffsetMs.abs() < 50
+                        ? Colors.orange
+                        : Colors.red,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final bool isMono;
+  final Color? valueColor;
+
+  const _InfoRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.isMono = false,
+    this.valueColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: Theme.of(context).colorScheme.outline),
+        const SizedBox(width: 8),
+        Text(
+          '$label : ',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  fontFamily: isMono ? 'monospace' : null,
+                  fontWeight: FontWeight.w500,
+                  color: valueColor,
+                ),
+            textAlign: TextAlign.end,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _FileTransferCard extends StatelessWidget {
+  final double progress;
+
+  const _FileTransferCard({required this.progress});
+
+  @override
+  Widget build(BuildContext context) {
+    final percent = (progress * 100).round();
+
+    return Card(
+      color: Theme.of(context).colorScheme.secondaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.downloading,
+                  color: Theme.of(context).colorScheme.onSecondaryContainer,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Transfert de fichier',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSecondaryContainer,
+                            ),
+                      ),
+                      Text(
+                        '$percent% reçu',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSecondaryContainer,
+                            ),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(
+                  width: 32,
+                  height: 32,
+                  child: CircularProgressIndicator(
+                    value: progress,
+                    strokeWidth: 3,
+                    color: Theme.of(context).colorScheme.onSecondaryContainer,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: progress,
+                minHeight: 6,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TrackInfoCard extends StatelessWidget {
+  final AudioTrack? track;
+  final bool isPlaying;
+  final Duration position;
+  final Duration? duration;
+
+  const _TrackInfoCard({
+    required this.track,
+    required this.isPlaying,
+    required this.position,
+    required this.duration,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hasTrack = track != null;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            // Album art placeholder
+            Container(
+              width: 160,
+              height: 160,
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primaryContainer,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.1),
+                    blurRadius: 8,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Icon(
+                    hasTrack ? Icons.music_note : Icons.music_off,
+                    size: 64,
+                    color: Theme.of(context).colorScheme.onPrimaryContainer,
+                  ),
+                  if (isPlaying)
+                    Positioned(
+                      bottom: 8,
+                      right: 8,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.green,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.green.withValues(alpha: 0.4),
+                              blurRadius: 6,
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.play_arrow,
+                          size: 16,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Track title
+            Text(
+              hasTrack ? track!.title : 'Aucun morceau',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+
+            // Artist
+            if (hasTrack && track!.artist != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                track!.artist!,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+              ),
+            ],
+
+            // Album
+            if (hasTrack && track!.album != null) ...[
+              const SizedBox(height: 2),
+              Text(
+                track!.album!,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.outline,
+                    ),
+              ),
+            ],
+
+            const SizedBox(height: 8),
+
+            // Playback state chip
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: isPlaying
+                    ? Colors.green.withValues(alpha: 0.15)
+                    : Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    isPlaying ? Icons.play_arrow : Icons.pause,
+                    size: 16,
+                    color: isPlaying
+                        ? Colors.green[700]
+                        : Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    isPlaying ? 'En lecture' : 'En pause',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: isPlaying
+                          ? Colors.green[700]
+                          : Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PlaybackInfoCard extends StatelessWidget {
+  final Duration position;
+  final Duration duration;
+  final bool isPlaying;
+
+  const _PlaybackInfoCard({
+    required this.position,
+    required this.duration,
+    required this.isPlaying,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = duration.inMilliseconds > 0
+        ? position.inMilliseconds / duration.inMilliseconds
+        : 0.0;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            // Progress bar
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: progress.clamp(0.0, 1.0),
+                minHeight: 6,
+              ),
+            ),
+
+            const SizedBox(height: 8),
+
+            // Time labels
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  formatDuration(position),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        fontFamily: 'monospace',
+                      ),
+                ),
+                Text(
+                  formatDuration(duration),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        fontFamily: 'monospace',
+                        color: Theme.of(context).colorScheme.outline,
+                      ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 8),
+
+            // Read-only indicator
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.lock,
+                  size: 14,
+                  color: Theme.of(context).colorScheme.outline,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Contrôlé par l\'hôte',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.outline,
+                        fontStyle: FontStyle.italic,
+                      ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _VolumeCard extends StatefulWidget {
+  final ValueChanged<double> onChanged;
+
+  const _VolumeCard({required this.onChanged});
+
+  @override
+  State<_VolumeCard> createState() => _VolumeCardState();
+}
+
+class _VolumeCardState extends State<_VolumeCard> {
+  double _volume = 1.0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.volume_up,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Volume local',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const Spacer(),
+                Text(
+                  '${(_volume * 100).round()}%',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(
+                  _volume == 0
+                      ? Icons.volume_off
+                      : _volume < 0.5
+                          ? Icons.volume_down
+                          : Icons.volume_up,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  size: 20,
+                ),
+                Expanded(
+                  child: Slider(
+                    value: _volume,
+                    min: 0,
+                    max: 1,
+                    onChanged: (value) {
+                      setState(() => _volume = value);
+                      widget.onChanged(value);
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

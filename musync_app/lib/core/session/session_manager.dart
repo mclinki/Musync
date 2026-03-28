@@ -528,7 +528,7 @@ class SessionManager {
       await _audioEngine.seek(Duration(milliseconds: event.seekPositionMs!));
     }
 
-    // Play immediately (simple sync via delay)
+    // Play at scheduled time
     final delayMs = event.startAtMs != null
         ? event.startAtMs! - DateTime.now().millisecondsSinceEpoch
         : 0;
@@ -537,7 +537,16 @@ class SessionManager {
       _logger.i('Waiting ${delayMs}ms before playing...');
       await Future.delayed(Duration(milliseconds: delayMs));
     } else if (delayMs < 0) {
-      _logger.w('Delay is negative ($delayMs), playing immediately (late)');
+      // We're late - try to compensate by seeking forward
+      final lateMs = -delayMs;
+      _logger.w('Late by ${lateMs}ms, seeking forward to compensate');
+      if (lateMs < 5000) {
+        // Only compensate if less than 5 seconds late
+        final currentPosition = _audioEngine.position.inMilliseconds;
+        await _audioEngine.seek(Duration(milliseconds: currentPosition + lateMs));
+      } else {
+        _logger.e('Too late (${lateMs}ms), playing without compensation');
+      }
     }
 
     _logger.d('Calling audioEngine.play()...');

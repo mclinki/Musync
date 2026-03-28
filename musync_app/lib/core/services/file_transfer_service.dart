@@ -176,8 +176,19 @@ class FileTransferService {
     final base64Data = message.payload['data'] as String;
     final bytes = base64Decode(base64Data);
 
-    transfer.chunks.add(bytes);
-    _logger.d('Received chunk $chunkIndex, total chunks: ${transfer.chunks.length}/${transfer.totalChunks}');
+    // Verify chunk order - insert at correct index
+    if (chunkIndex < transfer.totalChunks) {
+      // Ensure the chunks list has enough capacity
+      while (transfer.chunks.length <= chunkIndex) {
+        transfer.chunks.add(Uint8List(0));
+      }
+      transfer.chunks[chunkIndex] = bytes;
+    } else {
+      _logger.w('Received chunk $chunkIndex but totalChunks is ${transfer.totalChunks}');
+    }
+
+    final receivedCount = transfer.chunks.where((c) => c.isNotEmpty).length;
+    _logger.d('Received chunk $chunkIndex, total chunks: $receivedCount/${transfer.totalChunks}');
     
     // Report progress
     _progressController.add(TransferProgress(

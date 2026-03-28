@@ -8,6 +8,7 @@ Turn any collection of phones, tablets, or speakers into a synchronized multi-ro
 [![Dart](https://img.shields.io/badge/Dart-3.6-blue.svg)](https://dart.dev)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-32%2F32-passing-brightgreen.svg)](musync_app/test/)
+[![Version](https://img.shields.io/badge/Version-0.1.1-blue.svg)](CHANGELOG.md)
 
 ---
 
@@ -17,10 +18,19 @@ Turn any collection of phones, tablets, or speakers into a synchronized multi-ro
 - **NTP-like clock sync** — Achieves ±10-30ms accuracy over Wi-Fi
 - **Local file playback** — Pick any audio file from your device
 - **URL streaming** — Play audio from any direct URL
-- **Auto-discovery** — Devices find each other via mDNS (Zeroconf)
+- **Auto-discovery** — Devices find each other via TCP subnet scan
 - **Auto-reconnection** — Seamless recovery from network hiccups
 - **Background playback** — Android foreground service keeps sessions alive
 - **File transfer** — Host automatically shares local files with slaves
+
+---
+
+## 📦 Builds
+
+| Platform | Chemin | Statut |
+|----------|--------|--------|
+| **Android** | `musync_app/build/app/outputs/flutter-apk/app-debug.apk` | ✅ v0.1.1 |
+| **iOS** | Build via Xcode (`flutter build ios`) | ⚠️ Nécessite macOS |
 
 ---
 

@@ -244,14 +244,6 @@ class WebSocketServer {
 
     final response = ProtocolMessage.syncResponse(t1: t1, t2: t2, t3: t3);
     socket.add(response.encode());
-
-    // Find which slave this is and update their offset
-    for (final slave in _slaves.values) {
-      if (slave.socket == socket) {
-        // The slave will calculate the offset, but we can track it here too
-        break;
-      }
-    }
   }
 
   void _handleHeartbeatAck(WebSocket socket, ProtocolMessage message) {

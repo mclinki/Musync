@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/utils/format.dart';
 
 class PositionSlider extends StatefulWidget {
   final Duration position;
@@ -6,6 +7,7 @@ class PositionSlider extends StatefulWidget {
   final ValueChanged<Duration> onSeek;
 
   const PositionSlider({
+    super.key,
     required this.position,
     this.duration,
     required this.onSeek,
@@ -62,12 +64,12 @@ class _PositionSliderState extends State<PositionSlider> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                _formatDuration(widget.position),
+                formatDuration(widget.position),
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               Text(
                 widget.duration != null
-                    ? _formatDuration(widget.duration!)
+                    ? formatDuration(widget.duration!)
                     : '--:--',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
@@ -76,11 +78,5 @@ class _PositionSliderState extends State<PositionSlider> {
         ),
       ],
     );
-  }
-
-  String _formatDuration(Duration d) {
-    final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
   }
 }

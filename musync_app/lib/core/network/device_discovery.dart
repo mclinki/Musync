@@ -1,19 +1,15 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:logger/logger.dart';
-import 'package:multicast_dns/multicast_dns.dart';
 import '../models/models.dart';
 
 /// Service type constant.
 const int kDefaultPort = 7890;
 
-/// mDNS service type for MusyncMIMO.
-const String _kServiceType = '_musync._tcp.local';
-
 /// Discovers MusyncMIMO devices on the local network.
 ///
-/// Uses mDNS/Zeroconf as primary discovery method,
-/// with TCP subnet scan as fallback for networks where mDNS is blocked.
+/// Uses TCP subnet scan as primary discovery method.
+/// mDNS can be added later with bonsoir package.
 class DeviceDiscovery {
   final Logger _logger;
   final String deviceId;
@@ -23,17 +19,18 @@ class DeviceDiscovery {
   final StreamController<DeviceInfo> _deviceController =
       StreamController.broadcast();
   final Map<String, DeviceInfo> _discoveredDevices = {};
-
-  // mDNS
-  MDnsClient? _mdnsClient;
-  Timer? _mdnsScanTimer;
+  final Map<String, DateTime> _deviceTimestamps = {};
 
   // TCP fallback
   ServerSocket? _discoveryServer;
   Timer? _tcpScanTimer;
+  Timer? _cleanupTimer;
 
   bool _isPublishing = false;
   bool _isScanning = false;
+
+  // Device TTL (time to live) - remove devices not seen for this duration
+  static const Duration _deviceTtl = Duration(seconds: 60);
 
   DeviceDiscovery({
     required this.deviceId,
@@ -58,7 +55,7 @@ class DeviceDiscovery {
   bool get isPublishing => _isPublishing;
 
   /// Start publishing this device as a MusyncMIMO host.
-  /// Uses mDNS advertisement + TCP probe server as fallback.
+  /// Starts a TCP probe server that responds to discovery requests.
   Future<void> startPublishing({int port = kDefaultPort}) async {
     if (_isPublishing) {
       _logger.w('Already publishing');
@@ -67,7 +64,7 @@ class DeviceDiscovery {
 
     _isPublishing = true;
 
-    // TCP probe server (for fallback discovery)
+    // TCP probe server (for discovery)
     try {
       _discoveryServer =
           await ServerSocket.bind(InternetAddress.anyIPv4, port + 1);
@@ -95,13 +92,15 @@ class DeviceDiscovery {
   /// Stop publishing this device's service.
   Future<void> stopPublishing() async {
     _isPublishing = false;
+
+    // Stop TCP server
     await _discoveryServer?.close();
     _discoveryServer = null;
+
     _logger.i('Stopped publishing service');
   }
 
   /// Start scanning for MusyncMIMO devices on the network.
-  /// Tries mDNS first, falls back to TCP subnet scan.
   Future<void> startScanning(
       {Duration interval = const Duration(seconds: 5)}) async {
     if (_isScanning) {
@@ -110,26 +109,26 @@ class DeviceDiscovery {
     }
 
     _isScanning = true;
-    _logger.i('Starting device scan (mDNS + TCP fallback)...');
+    _logger.i('Starting device scan...');
 
-    // Start mDNS lookup
-    await _startMdnsScan();
-
-    // Start TCP fallback scan
+    // Start TCP scan
     await _startTcpScan(interval: interval);
+
+    // Start cleanup timer for stale devices
+    _cleanupTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _cleanupStaleDevices();
+    });
   }
 
   /// Stop scanning for devices.
   Future<void> stopScanning() async {
-    _mdnsScanTimer?.cancel();
-    _mdnsScanTimer = null;
+    // Stop TCP scan
     _tcpScanTimer?.cancel();
     _tcpScanTimer = null;
 
-    try {
-      _mdnsClient?.stop();
-    } catch (_) {}
-    _mdnsClient = null;
+    // Stop cleanup timer
+    _cleanupTimer?.cancel();
+    _cleanupTimer = null;
 
     _isScanning = false;
     _logger.i('Stopped scanning');
@@ -154,7 +153,8 @@ class DeviceDiscovery {
           if (interface.name.toLowerCase().contains('wlan') ||
               interface.name.toLowerCase().contains('wi-fi') ||
               interface.name.toLowerCase().contains('en0') ||
-              interface.name.toLowerCase().contains('wlp')) {
+              interface.name.toLowerCase().contains('wlp') ||
+              interface.name.toLowerCase().contains('eth')) {
             return addr.address;
           }
         }
@@ -174,6 +174,26 @@ class DeviceDiscovery {
     return null;
   }
 
+  /// Remove devices that haven't been seen for a while.
+  void _cleanupStaleDevices() {
+    final now = DateTime.now();
+    final staleIds = <String>[];
+
+    for (final entry in _deviceTimestamps.entries) {
+      if (now.difference(entry.value) > _deviceTtl) {
+        staleIds.add(entry.key);
+      }
+    }
+
+    for (final id in staleIds) {
+      final device = _discoveredDevices.remove(id);
+      _deviceTimestamps.remove(id);
+      if (device != null) {
+        _logger.d('Removed stale device: ${device.name}');
+      }
+    }
+  }
+
   /// Dispose resources.
   Future<void> dispose() async {
     await stopScanning();
@@ -181,81 +201,7 @@ class DeviceDiscovery {
     await _deviceController.close();
   }
 
-  // ── mDNS Discovery ──
-
-  Future<void> _startMdnsScan() async {
-    try {
-      _mdnsClient = MDnsClient();
-      await _mdnsClient!.start();
-      _logger.i('mDNS client started, looking for $_kServiceType');
-
-      // Initial lookup
-      await _lookupMdns();
-
-      // Periodic lookup
-      _mdnsScanTimer = Timer.periodic(
-        const Duration(seconds: 5),
-        (_) => _lookupMdns(),
-      );
-    } catch (e) {
-      _logger.w('mDNS failed to start (will use TCP fallback): $e');
-    }
-  }
-
-  Future<void> _lookupMdns() async {
-    if (_mdnsClient == null) return;
-
-    try {
-      await for (final PtrResourceRecord ptr
-          in _mdnsClient!.lookup<PtrResourceRecord>(
-        ResourceRecordQuery.serverPointer(_kServiceType),
-      )) {
-        // Found a service pointer, now get the SRV record
-        await for (final SrvResourceRecord srv
-            in _mdnsClient!.lookup<SrvResourceRecord>(
-          ResourceRecordQuery.service(ptr.domainName),
-        )) {
-          // Get the IP address
-          await for (final IPAddressResourceRecord ip
-              in _mdnsClient!.lookup<IPAddressResourceRecord>(
-            ResourceRecordQuery.addressIPv4(srv.target),
-          )) {
-            // Get TXT records for device info
-            final txtRecords = <String, String>{};
-            await for (final TxtResourceRecord txt
-                in _mdnsClient!.lookup<TxtResourceRecord>(
-              ResourceRecordQuery.text(ptr.domainName),
-            )) {
-              for (final entry in txt.text.split('\n')) {
-                final parts = entry.split('=');
-                if (parts.length == 2) {
-                  txtRecords[parts[0]] = parts[1];
-                }
-              }
-            }
-
-            final device = DeviceInfo.fromMdns(
-              name: ptr.domainName,
-              ip: ip.address.address,
-              port: srv.port,
-              txtRecords: txtRecords,
-            );
-
-            if (!_discoveredDevices.containsKey(device.id)) {
-              _discoveredDevices[device.id] = device;
-              _deviceController.add(device);
-              _logger.i(
-                  'mDNS discovered: ${device.name} at ${ip.address.address}:${srv.port}');
-            }
-          }
-        }
-      }
-    } catch (e) {
-      _logger.d('mDNS lookup error (non-critical): $e');
-    }
-  }
-
-  // ── TCP Fallback Discovery ──
+  // ── TCP Discovery ──
 
   Future<void> _startTcpScan(
       {Duration interval = const Duration(seconds: 5)}) async {
@@ -281,28 +227,43 @@ class DeviceDiscovery {
     if (parts.length != 4) return;
     final subnet = '${parts[0]}.${parts[1]}.${parts[2]}';
 
-    _logger.d('TCP scanning subnet $subnet.1-254:${port + 1}...');
+    _logger.i('TCP scanning subnet $subnet.1-254:${port + 1}...');
 
-    final futures = <Future<void>>[];
+    // Scan in batches to avoid overwhelming the network
+    const batchSize = 20;
+    for (int batch = 0; batch < 254; batch += batchSize) {
+      final futures = <Future<void>>[];
 
-    for (int i = 1; i <= 254; i++) {
-      final ip = '$subnet.$i';
-      if (ip == localIp) continue; // Skip self
+      for (int i = batch + 1;
+          i <= (batch + batchSize).clamp(1, 254);
+          i++) {
+        final ip = '$subnet.$i';
+        if (ip == localIp) continue; // Skip self
 
-      futures.add(_probeDevice(ip, port + 1).timeout(
-        const Duration(milliseconds: 800),
-        onTimeout: () {},
-      ));
+        futures.add(_probeDevice(ip, port + 1).timeout(
+          const Duration(milliseconds: 1500),
+          onTimeout: () {},
+        ));
+      }
+
+      await Future.wait(futures);
+
+      // Small delay between batches
+      if (batch + batchSize < 254) {
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
     }
 
-    await Future.wait(futures);
+    _logger
+        .d('TCP scan complete. Found ${_discoveredDevices.length} device(s)');
   }
 
   /// Probe a specific IP for a MusyncMIMO device.
   Future<void> _probeDevice(String ip, int discoveryPort) async {
+    Socket? socket;
     try {
-      final socket = await Socket.connect(ip, discoveryPort)
-          .timeout(const Duration(milliseconds: 500));
+      socket = await Socket.connect(ip, discoveryPort)
+          .timeout(const Duration(milliseconds: 800));
 
       // Send probe message
       socket.write('MUSYNC_PROBE');
@@ -310,7 +271,7 @@ class DeviceDiscovery {
 
       // Wait for response
       final response = await socket.first.timeout(
-        const Duration(milliseconds: 500),
+        const Duration(milliseconds: 800),
       );
 
       final message = String.fromCharCodes(response).trim();
@@ -334,15 +295,25 @@ class DeviceDiscovery {
 
           if (!_discoveredDevices.containsKey(device.id)) {
             _discoveredDevices[device.id] = device;
+            _deviceTimestamps[device.id] = DateTime.now();
             _deviceController.add(device);
             _logger.i('TCP discovered: ${device.name} at $ip:$devPort');
+          } else {
+            // Update timestamp for existing device
+            _deviceTimestamps[device.id] = DateTime.now();
           }
         }
       }
-
-      await socket.close();
-    } catch (_) {
-      // Connection failed, not a MusyncMIMO device
+    } on SocketException {
+      // Connection refused - not a MusyncMIMO device, normal
+    } on TimeoutException {
+      // Timeout - device not responding, normal
+    } catch (e) {
+      _logger.d('Probe error for $ip: $e');
+    } finally {
+      try {
+        await socket?.close();
+      } catch (_) {}
     }
   }
 }

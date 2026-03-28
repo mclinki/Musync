@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:equatable/equatable.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:logger/logger.dart';
 import '../../../core/core.dart';
@@ -95,6 +96,28 @@ class PlaybackStateChanged extends DiscoveryEvent {
   List<Object?> get props => [track, isPlaying, position, duration];
 }
 
+class SyncQualityChanged extends DiscoveryEvent {
+  final SyncQuality quality;
+  final double offsetMs;
+
+  const SyncQualityChanged({
+    required this.quality,
+    required this.offsetMs,
+  });
+
+  @override
+  List<Object?> get props => [quality, offsetMs];
+}
+
+class FileTransferProgressChanged extends DiscoveryEvent {
+  final double progress;
+
+  const FileTransferProgressChanged(this.progress);
+
+  @override
+  List<Object?> get props => [progress];
+}
+
 // ── State ──
 
 class DiscoveryState extends Equatable {
@@ -109,6 +132,15 @@ class DiscoveryState extends Equatable {
   final bool isPlaying;
   final Duration position;
   final Duration? duration;
+  // Host info for slave view
+  final DeviceInfo? hostDevice;
+  // Sync quality
+  final SyncQuality syncQuality;
+  final double syncOffsetMs;
+  // File transfer progress (0.0 to 1.0)
+  final double? fileTransferProgress;
+  // Connection state detail
+  final ConnectionDetail connectionDetail;
 
   const DiscoveryState({
     this.status = DiscoveryStatus.idle,
@@ -121,6 +153,11 @@ class DiscoveryState extends Equatable {
     this.isPlaying = false,
     this.position = Duration.zero,
     this.duration,
+    this.hostDevice,
+    this.syncQuality = SyncQuality.unknown,
+    this.syncOffsetMs = 0,
+    this.fileTransferProgress,
+    this.connectionDetail = ConnectionDetail.idle,
   });
 
   DiscoveryState copyWith({
@@ -135,6 +172,12 @@ class DiscoveryState extends Equatable {
     Duration? position,
     Duration? duration,
     bool clearTrack = false,
+    DeviceInfo? hostDevice,
+    SyncQuality? syncQuality,
+    double? syncOffsetMs,
+    double? fileTransferProgress,
+    bool clearFileTransferProgress = false,
+    ConnectionDetail? connectionDetail,
   }) {
     return DiscoveryState(
       status: status ?? this.status,
@@ -147,6 +190,13 @@ class DiscoveryState extends Equatable {
       isPlaying: isPlaying ?? this.isPlaying,
       position: position ?? this.position,
       duration: duration ?? this.duration,
+      hostDevice: hostDevice ?? this.hostDevice,
+      syncQuality: syncQuality ?? this.syncQuality,
+      syncOffsetMs: syncOffsetMs ?? this.syncOffsetMs,
+      fileTransferProgress: clearFileTransferProgress
+          ? null
+          : (fileTransferProgress ?? this.fileTransferProgress),
+      connectionDetail: connectionDetail ?? this.connectionDetail,
     );
   }
 
@@ -162,7 +212,79 @@ class DiscoveryState extends Equatable {
         isPlaying,
         position,
         duration,
+        hostDevice,
+        syncQuality,
+        syncOffsetMs,
+        fileTransferProgress,
+        connectionDetail,
       ];
+}
+
+enum SyncQuality {
+  unknown,
+  excellent,
+  good,
+  acceptable,
+  degraded;
+
+  String get label {
+    switch (this) {
+      case SyncQuality.unknown:
+        return 'Inconnu';
+      case SyncQuality.excellent:
+        return 'Excellent';
+      case SyncQuality.good:
+        return 'Bon';
+      case SyncQuality.acceptable:
+        return 'Acceptable';
+      case SyncQuality.degraded:
+        return 'Dégradé';
+    }
+  }
+
+  Color get color {
+    switch (this) {
+      case SyncQuality.unknown:
+        return Colors.grey;
+      case SyncQuality.excellent:
+        return Colors.green;
+      case SyncQuality.good:
+        return Colors.lightGreen;
+      case SyncQuality.acceptable:
+        return Colors.orange;
+      case SyncQuality.degraded:
+        return Colors.red;
+    }
+  }
+}
+
+enum ConnectionDetail {
+  idle,
+  connecting,
+  synchronizing,
+  connected,
+  reconnecting,
+  fileTransferring,
+  error;
+
+  String get label {
+    switch (this) {
+      case ConnectionDetail.idle:
+        return 'Inactif';
+      case ConnectionDetail.connecting:
+        return 'Connexion...';
+      case ConnectionDetail.synchronizing:
+        return 'Synchronisation...';
+      case ConnectionDetail.connected:
+        return 'Connecté';
+      case ConnectionDetail.reconnecting:
+        return 'Reconnexion...';
+      case ConnectionDetail.fileTransferring:
+        return 'Transfert de fichier...';
+      case ConnectionDetail.error:
+        return 'Erreur';
+    }
+  }
 }
 
 enum DiscoveryStatus {
@@ -198,10 +320,18 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
     on<LeaveSessionRequested>(_onLeaveSession);
     on<SessionStateChanged>(_onSessionStateChanged);
     on<PlaybackStateChanged>(_onPlaybackStateChanged);
+    on<SyncQualityChanged>(_onSyncQualityChanged);
+    on<FileTransferProgressChanged>(_onFileTransferProgressChanged);
 
     // Listen to session manager
     _devicesSub = sessionManager.devicesStream.listen((devices) {
-      // Devices are already in discoveredDevices
+      // Sync available devices from session manager
+      final currentIds = state.availableDevices.map((d) => d.id).toSet();
+      for (final device in devices) {
+        if (!currentIds.contains(device.id)) {
+          add(DeviceFound(device));
+        }
+      }
     });
 
     _stateSub = sessionManager.stateStream.listen((state) {
@@ -301,7 +431,12 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
     JoinSessionRequested event,
     Emitter<DiscoveryState> emit,
   ) async {
-    emit(state.copyWith(status: DiscoveryStatus.joining, errorMessage: null));
+    emit(state.copyWith(
+      status: DiscoveryStatus.joining,
+      errorMessage: null,
+      hostDevice: event.hostDevice,
+      connectionDetail: ConnectionDetail.connecting,
+    ));
     try {
       final success = await sessionManager.joinSession(
         hostIp: event.hostDevice.ip,
@@ -313,6 +448,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
         emit(state.copyWith(
           status: DiscoveryStatus.error,
           errorMessage: 'Failed to connect to host',
+          connectionDetail: ConnectionDetail.error,
         ));
       }
     } catch (e) {
@@ -320,6 +456,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
       emit(state.copyWith(
         status: DiscoveryStatus.error,
         errorMessage: 'Failed to join session: $e',
+        connectionDetail: ConnectionDetail.error,
       ));
     }
   }
@@ -342,6 +479,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
     emit(state.copyWith(
       status: DiscoveryStatus.joined,
       role: DeviceRole.slave,
+      connectionDetail: ConnectionDetail.connected,
     ));
   }
 
@@ -407,6 +545,28 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
       position: event.position,
       duration: event.duration,
       clearTrack: event.track == null,
+    ));
+  }
+
+  void _onSyncQualityChanged(
+    SyncQualityChanged event,
+    Emitter<DiscoveryState> emit,
+  ) {
+    emit(state.copyWith(
+      syncQuality: event.quality,
+      syncOffsetMs: event.offsetMs,
+    ));
+  }
+
+  void _onFileTransferProgressChanged(
+    FileTransferProgressChanged event,
+    Emitter<DiscoveryState> emit,
+  ) {
+    emit(state.copyWith(
+      fileTransferProgress: event.progress,
+      connectionDetail: event.progress < 1.0
+          ? ConnectionDetail.fileTransferring
+          : ConnectionDetail.connected,
     ));
   }
 
