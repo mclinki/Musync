@@ -216,7 +216,7 @@ class SessionManager {
   }
 
   /// Start playing a track (host only).
-  Future<void> playTrack(AudioTrack track, {int delayMs = 2000}) async {
+  Future<void> playTrack(AudioTrack track, {int delayMs = 1000}) async {
     if (_role != DeviceRole.host) {
       throw Exception('Only the host can start playback');
     }
@@ -244,8 +244,8 @@ class SessionManager {
         trackSource = track.source.split('/').last.split('\\').last;
         _logger.i('Broadcasting filename: $trackSource');
         
-        // Wait a bit for slaves to save the file
-        await Future.delayed(const Duration(milliseconds: 1500));
+        // Reduced wait time for slaves to save the file
+        await Future.delayed(const Duration(milliseconds: 500));
       } else {
         _logger.w('Failed to send file, slaves may not be able to play');
       }
@@ -254,6 +254,17 @@ class SessionManager {
     // Load track locally
     _logger.d('Loading track locally on host...');
     await _audioEngine.loadTrack(track);
+
+    // Send prepare command to slaves for pre-loading
+    if (_server!.slaveCount > 0) {
+      _logger.i('=== BROADCASTING PREPARE COMMAND ===');
+      await _server!.broadcastPrepare(
+        trackSource: trackSource,
+        sourceType: track.sourceType,
+      );
+      // Wait a bit for slaves to preload
+      await Future.delayed(const Duration(milliseconds: 300));
+    }
 
     // Broadcast to slaves (they will load and play)
     _logger.i('=== BROADCASTING PLAY COMMAND ===');
@@ -410,6 +421,9 @@ class SessionManager {
       case ClientEventType.synced:
         _logger.i('Clock synchronized');
         break;
+      case ClientEventType.prepareCommand:
+        _handlePrepareCommand(event);
+        break;
       case ClientEventType.playCommand:
         _handlePlayCommand(event);
         break;
@@ -440,6 +454,41 @@ class SessionManager {
         _emitState(SessionManagerState.scanning);
         break;
     }
+  }
+
+  Future<void> _handlePrepareCommand(ClientEvent event) async {
+    if (event.trackSource == null) {
+      _logger.w('Received prepare command with null trackSource, skipping');
+      return;
+    }
+
+    _logger.i('=== PREPARE COMMAND RECEIVED ===');
+    _logger.i('trackSource: ${event.trackSource}');
+    _logger.i('sourceType: ${event.sourceType}');
+
+    String trackSource = event.trackSource!;
+
+    // If it's a local file, check if we have it in cache
+    if (event.sourceType == AudioSourceType.localFile) {
+      final cachedPath = '${_fileTransfer.cachePath}/$trackSource';
+      final cachedFile = File(cachedPath);
+
+      if (await cachedFile.exists()) {
+        trackSource = cachedPath;
+        _logger.d('File found in cache: $trackSource');
+      } else {
+        _logger.w('File not in cache yet, will check on play');
+        return;
+      }
+    }
+
+    final track = event.sourceType == AudioSourceType.localFile
+        ? AudioTrack.fromFilePath(trackSource)
+        : AudioTrack.fromUrl(trackSource);
+
+    // Preload the track for faster playback
+    await _audioEngine.preloadTrack(track);
+    _logger.i('Track preloaded: ${track.title}');
   }
 
   Future<void> _handlePlayCommand(ClientEvent event) async {
@@ -514,8 +563,8 @@ class SessionManager {
     _logger.i('Creating AudioTrack: ${track.title}');
     
     try {
-      _logger.d('Calling audioEngine.loadTrack...');
-      await _audioEngine.loadTrack(track);
+      _logger.d('Calling audioEngine.loadPreloaded...');
+      await _audioEngine.loadPreloaded(track);
       _logger.i('AudioTrack loaded successfully');
     } catch (e) {
       _logger.e('!!! FAILED TO LOAD TRACK !!!: $e');

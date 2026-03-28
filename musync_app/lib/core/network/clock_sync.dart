@@ -132,9 +132,9 @@ class ClockSyncEngine {
         samples.add(sample);
         _logger.d('Sample $i: $sample');
 
-        // Small delay between samples to avoid flooding
+        // Reduced delay between samples for faster calibration
         if (i < _samplesPerCalibration - 1) {
-          await Future.delayed(const Duration(milliseconds: 100));
+          await Future.delayed(const Duration(milliseconds: 50));
         }
       } catch (e) {
         _logger.w('Sync request failed at sample $i: $e');
@@ -151,7 +151,7 @@ class ClockSyncEngine {
   }
 
   /// Start automatic periodic calibration.
-  void startAutoCalibration({Duration interval = const Duration(seconds: 30)}) {
+  void startAutoCalibration({Duration interval = const Duration(seconds: 10)}) {
     stopAutoCalibration();
     _calibrationTimer = Timer.periodic(interval, (_) async {
       await calibrate();

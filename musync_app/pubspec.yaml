@@ -1,6 +1,6 @@
 name: musync_mimo
 description: Synchronize music playback across multiple devices on the same Wi-Fi network.
-version: 0.1.1+2
+version: 0.1.2+3
 publish_to: 'none'
 
 environment:

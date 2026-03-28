@@ -17,6 +17,7 @@ enum MessageType {
   clockAdjust,
 
   // Playback control
+  prepare,  // Pre-load a track for faster playback
   play,
   pause,
   stop,
@@ -154,6 +155,19 @@ class ProtocolMessage {
   }
 
   // Playback
+  factory ProtocolMessage.prepare({
+    required String trackSource,
+    required AudioSourceType sourceType,
+  }) {
+    return ProtocolMessage(
+      type: MessageType.prepare,
+      payload: {
+        'track_source': trackSource,
+        'source_type': sourceType.name,
+      },
+    );
+  }
+
   factory ProtocolMessage.play({
     required int startAtMs,
     required String trackSource,

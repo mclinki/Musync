@@ -5,7 +5,26 @@
 
 ---
 
-## Session du 2026-03-28
+## Session du 2026-03-28 (v0.1.2)
+
+### Contexte
+Optimisation de la synchronisation audio pour réduire la latence au maximum.
+
+### Modifications
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 1 | `FEAT` | Ajout du protocole `prepare` pour pré-charger les fichiers | `protocol_message.dart`, `websocket_server.dart`, `websocket_client.dart` |
+| 2 | `OPTIM` | Réduction du délai entre samples de calibration (100ms → 50ms) | `clock_sync.dart` |
+| 3 | `OPTIM` | Augmentation de la fréquence de calibration (30s → 10s) | `clock_sync.dart` |
+| 4 | `OPTIM` | Réduction du délai de démarrage par défaut (2000ms → 1000ms) | `session_manager.dart`, `websocket_server.dart` |
+| 5 | `FEAT` | Méthodes `preloadTrack` et `loadPreloaded` dans AudioEngine | `audio_engine.dart` |
+| 6 | `OPTIM` | Réduction du temps d'attente pour sauvegarde fichier (1500ms → 500ms) | `session_manager.dart` |
+| 7 | `FEAT` | Commande `prepare` envoyée avant `play` pour pré-chargement | `session_manager.dart` |
+
+---
+
+## Session du 2026-03-28 (v0.1.1)
 
 ### Contexte
 Review complète du projet et corrections de bugs. Amélioration de l'UI invité et du système de découverte.
@@ -44,13 +63,25 @@ _(les entrées seront ajoutées au fur et à mesure des modifications)_
 
 - Chaque modification est datée et catégorisée
 - Format : **[catégorie]** Description du changement → `fichier(s) modifié(s)`
-- Catégories : `FIX` `FEAT` `REFACTOR` `TEST` `DOC` `CHORE`
+- Catégories : `FIX` `FEAT` `REFACTOR` `TEST` `DOC` `CHORE` `OPTIM`
 
 ---
 
 ## Historique Complet
 
-### 2026-03-28
+### 2026-03-28 (v0.1.2)
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 1 | `FEAT` | Ajout du protocole `prepare` pour pré-charger les fichiers | `protocol_message.dart`, `websocket_server.dart`, `websocket_client.dart` |
+| 2 | `OPTIM` | Réduction du délai entre samples de calibration (100ms → 50ms) | `clock_sync.dart` |
+| 3 | `OPTIM` | Augmentation de la fréquence de calibration (30s → 10s) | `clock_sync.dart` |
+| 4 | `OPTIM` | Réduction du délai de démarrage par défaut (2000ms → 1000ms) | `session_manager.dart`, `websocket_server.dart` |
+| 5 | `FEAT` | Méthodes `preloadTrack` et `loadPreloaded` dans AudioEngine | `audio_engine.dart` |
+| 6 | `OPTIM` | Réduction du temps d'attente pour sauvegarde fichier (1500ms → 500ms) | `session_manager.dart` |
+| 7 | `FEAT` | Commande `prepare` envoyée avant `play` pour pré-chargement | `session_manager.dart` |
+
+### 2026-03-28 (v0.1.1)
 
 | # | Catégorie | Description | Fichiers |
 |---|-----------|-------------|----------|

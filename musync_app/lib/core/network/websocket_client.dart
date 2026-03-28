@@ -297,6 +297,9 @@ class WebSocketClient {
         case MessageType.clockAdjust:
           _handleClockAdjust(message);
           break;
+        case MessageType.prepare:
+          _handlePrepare(message);
+          break;
         case MessageType.play:
           _handlePlay(message);
           break;
@@ -366,6 +369,24 @@ class WebSocketClient {
     final offsetMs = (message.payload['offset_ms'] as num).toDouble();
     final driftPpm = (message.payload['drift_ppm'] as num).toDouble();
     _logger.d('Clock adjust: offset=$offsetMs, drift=$driftPpm');
+  }
+
+  void _handlePrepare(ProtocolMessage message) {
+    final trackSource = message.payload['track_source'] as String;
+    final sourceTypeStr = message.payload['source_type'] as String;
+
+    final sourceType = AudioSourceType.values.firstWhere(
+      (e) => e.name == sourceTypeStr,
+      orElse: () => AudioSourceType.localFile,
+    );
+
+    _logger.i('Received prepare command: source=$trackSource');
+
+    _eventController.add(ClientEvent(
+      type: ClientEventType.prepareCommand,
+      trackSource: trackSource,
+      sourceType: sourceType,
+    ));
   }
 
   void _handlePlay(ProtocolMessage message) {
@@ -466,6 +487,7 @@ enum ClientEventType {
   joined,
   rejected,
   synced,
+  prepareCommand,
   playCommand,
   pauseCommand,
   seekCommand,

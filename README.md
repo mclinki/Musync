@@ -8,7 +8,7 @@ Turn any collection of phones, tablets, or speakers into a synchronized multi-ro
 [![Dart](https://img.shields.io/badge/Dart-3.6-blue.svg)](https://dart.dev)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-32%2F32-passing-brightgreen.svg)](musync_app/test/)
-[![Version](https://img.shields.io/badge/Version-0.1.1-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-0.1.2-blue.svg)](CHANGELOG.md)
 
 ---
 
@@ -29,8 +29,11 @@ Turn any collection of phones, tablets, or speakers into a synchronized multi-ro
 
 | Platform | Chemin | Statut |
 |----------|--------|--------|
-| **Android** | `musync_app/build/app/outputs/flutter-apk/app-debug.apk` | ✅ v0.1.1 |
+| **Android** | `musync_app/build/app/outputs/flutter-apk/app-debug.apk` | ✅ v0.1.2 |
 | **iOS** | Build via Xcode (`flutter build ios`) | ⚠️ Nécessite macOS |
+
+> **Note** : Les fichiers APK ne sont pas inclus dans le dépôt GitHub (trop volumineux). 
+> Pour obtenir l'APK, compilez le projet avec `flutter build apk --debug`.
 
 ---
 

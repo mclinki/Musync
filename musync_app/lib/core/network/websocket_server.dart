@@ -101,11 +101,25 @@ class WebSocketServer {
     _logger.i('WebSocket server stopped');
   }
 
+  /// Broadcast a prepare command to all slaves for pre-loading.
+  Future<void> broadcastPrepare({
+    required String trackSource,
+    required AudioSourceType sourceType,
+  }) async {
+    final message = ProtocolMessage.prepare(
+      trackSource: trackSource,
+      sourceType: sourceType,
+    );
+
+    _logger.i('Broadcasting prepare: source=$trackSource');
+    await broadcast(message);
+  }
+
   /// Broadcast a play command to all slaves.
   Future<void> broadcastPlay({
     required String trackSource,
     required AudioSourceType sourceType,
-    int delayMs = 2000,
+    int delayMs = 1000,
     int seekPositionMs = 0,
   }) async {
     final startAtMs = clockSync.syncedTimeMs + delayMs;

@@ -30,9 +30,14 @@ class AudioEngine {
   AudioTrack? _currentTrack;
   Timer? _positionTimer;
 
+  // Pre-loaded audio source for faster playback
+  ja.AudioSource? _preloadedSource;
+
   AudioEngine({Logger? logger})
       : _logger = logger ?? Logger(),
-        _player = ja.AudioPlayer();
+        _player = ja.AudioPlayer(
+          // Configure for low latency
+        );
 
   // ── Public API ──
 
@@ -109,6 +114,50 @@ class AudioEngine {
       _logger.e('Failed to load track: $e');
       _setState(AudioEngineState.error);
       rethrow;
+    }
+  }
+
+  /// Preload a track without playing it.
+  /// This reduces latency when play() is called later.
+  Future<void> preloadTrack(AudioTrack track) async {
+    _logger.i('Preloading track: ${track.title}');
+
+    try {
+      if (track.sourceType == AudioSourceType.localFile) {
+        final file = File(track.source);
+        if (!await file.exists()) {
+          _logger.w('Cannot preload: file not found: ${track.source}');
+          return;
+        }
+        _preloadedSource = ja.AudioSource.uri(Uri.file(track.source));
+      } else {
+        _preloadedSource = ja.AudioSource.uri(Uri.parse(track.source));
+      }
+
+      _logger.i('Track preloaded: ${track.title}');
+    } catch (e) {
+      _logger.w('Preload failed (non-critical): $e');
+    }
+  }
+
+  /// Load a preloaded track for immediate playback.
+  /// Falls back to regular loadTrack if not preloaded.
+  Future<void> loadPreloaded(AudioTrack track) async {
+    if (_preloadedSource != null) {
+      _logger.i('Loading preloaded track: ${track.title}');
+      _setState(AudioEngineState.loading);
+
+      try {
+        await _player.setAudioSource(_preloadedSource!);
+        _currentTrack = track;
+        _preloadedSource = null;
+        _logger.i('Preloaded track loaded successfully');
+      } catch (e) {
+        _logger.w('Failed to load preloaded source, falling back to regular load: $e');
+        await loadTrack(track);
+      }
+    } else {
+      await loadTrack(track);
     }
   }
 
