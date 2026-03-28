@@ -465,6 +465,7 @@ class DeviceDiscovery {
       await for (final ptrRecord in _mdnsClient!.lookup(
         ResourceRecordQuery.serverPointer('$kMdnsServiceType.local'),
       )) {
+        if (ptrRecord is! PtrResourceRecord) continue;
         final instanceName = ptrRecord.domainName;
         _logger.d('mDNS found service instance: $instanceName');
 
@@ -472,6 +473,7 @@ class DeviceDiscovery {
         await for (final srvRecord in _mdnsClient!.lookup(
           ResourceRecordQuery.service(instanceName),
         )) {
+          if (srvRecord is! SrvResourceRecord) continue;
           final host = srvRecord.target;
           final port = srvRecord.port;
 
@@ -480,7 +482,9 @@ class DeviceDiscovery {
           await for (final aRecord in _mdnsClient!.lookup(
             ResourceRecordQuery.addressIPv4(host),
           )) {
-            ip = aRecord.address.address;
+            if (aRecord is IPAddressResourceRecord) {
+              ip = aRecord.address.address;
+            }
             break;
           }
 
@@ -495,12 +499,15 @@ class DeviceDiscovery {
             await for (final txtRecord in _mdnsClient!.lookup(
               ResourceRecordQuery.text(instanceName),
             )) {
-              for (final entry in txtRecord.text.split('\n')) {
-                final parts = entry.split('=');
-                if (parts.length == 2) {
-                  txtRecords[parts[0]] = parts[1];
+              if (txtRecord is TxtResourceRecord) {
+                for (final entry in txtRecord.text.split('\n')) {
+                  final parts = entry.split('=');
+                  if (parts.length == 2) {
+                    txtRecords[parts[0]] = parts[1];
+                  }
                 }
               }
+              break;
             }
 
             final devId = txtRecords['device_id'] ?? instanceName;
