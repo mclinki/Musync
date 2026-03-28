@@ -32,6 +32,17 @@ class _PlayerView extends StatelessWidget {
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.of(context).pop(),
         ),
+        actions: [
+          BlocBuilder<PlayerBloc, PlayerState>(
+            builder: (context, state) {
+              return IconButton(
+                icon: const Icon(Icons.queue_music),
+                tooltip: 'File d\'attente (${state.playlist.length})',
+                onPressed: () => _showQueueSheet(context, state),
+              );
+            },
+          ),
+        ],
       ),
       body: BlocBuilder<PlayerBloc, PlayerState>(
         builder: (context, state) {
@@ -58,6 +69,8 @@ class _PlayerView extends StatelessWidget {
                 // Playback controls
                 _PlaybackControls(
                   status: state.status,
+                  hasNext: state.hasNext,
+                  hasPrevious: state.hasPrevious,
                   onPlay: () {
                     context.read<PlayerBloc>().add(const PlayRequested());
                   },
@@ -66,6 +79,12 @@ class _PlayerView extends StatelessWidget {
                   },
                   onStop: () {
                     context.read<PlayerBloc>().add(const StopRequested());
+                  },
+                  onSkipNext: () {
+                    context.read<PlayerBloc>().add(const SkipNextRequested());
+                  },
+                  onSkipPrevious: () {
+                    context.read<PlayerBloc>().add(const SkipPreviousRequested());
                   },
                 ),
 
@@ -86,7 +105,21 @@ class _PlayerView extends StatelessWidget {
                   onFilePicked: (track) {
                     context.read<PlayerBloc>().add(LoadTrackRequested(track));
                   },
+                  onAddToQueue: (track) {
+                    context.read<PlayerBloc>().add(AddToQueueRequested(track));
+                  },
                 ),
+
+                // Queue info
+                if (state.playlist.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    'File d\'attente : ${state.playlist.currentIndex + 1}/${state.playlist.length}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
+                  ),
+                ],
 
                 // Error message
                 if (state.errorMessage != null) ...[
@@ -100,6 +133,121 @@ class _PlayerView extends StatelessWidget {
                 ],
               ],
             ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _showQueueSheet(BuildContext context, PlayerState state) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        minChildSize: 0.3,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (context, scrollController) {
+          return Column(
+            children: [
+              // Header
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    const Icon(Icons.queue_music),
+                    const SizedBox(width: 8),
+                    Text(
+                      'File d\'attente (${state.playlist.length})',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const Spacer(),
+                    if (state.playlist.isNotEmpty)
+                      IconButton(
+                        icon: const Icon(Icons.delete_sweep),
+                        tooltip: 'Vider la file',
+                        onPressed: () {
+                          context
+                              .read<PlayerBloc>()
+                              .add(const ClearQueueRequested());
+                          Navigator.pop(context);
+                        },
+                      ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              // Queue list
+              Expanded(
+                child: state.playlist.isEmpty
+                    ? const Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.queue_music,
+                                size: 48, color: Colors.grey),
+                            SizedBox(height: 16),
+                            Text('File d\'attente vide'),
+                            SizedBox(height: 8),
+                            Text(
+                              'Ajoutez des morceaux avec le bouton +',
+                              style: TextStyle(color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                      )
+                    : ListView.builder(
+                        controller: scrollController,
+                        itemCount: state.playlist.length,
+                        itemBuilder: (context, index) {
+                          final track = state.playlist.tracks[index];
+                          final isCurrent =
+                              index == state.playlist.currentIndex;
+                          return ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: isCurrent
+                                  ? Theme.of(context).colorScheme.primary
+                                  : Theme.of(context)
+                                      .colorScheme
+                                      .surfaceContainerHighest,
+                              child: isCurrent
+                                  ? const Icon(Icons.play_arrow,
+                                      color: Colors.white)
+                                  : Text('${index + 1}'),
+                            ),
+                            title: Text(
+                              track.title,
+                              style: TextStyle(
+                                fontWeight: isCurrent
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                              ),
+                            ),
+                            subtitle: track.artist != null
+                                ? Text(track.artist!)
+                                : null,
+                            trailing: IconButton(
+                              icon: const Icon(Icons.close, size: 20),
+                              onPressed: () {
+                                context.read<PlayerBloc>().add(
+                                    RemoveFromQueueRequested(index));
+                              },
+                            ),
+                            onTap: () {
+                              // Jump to this track
+                              final newPlaylist =
+                                  state.playlist.goTo(index);
+                              context.read<PlayerBloc>().add(
+                                    LoadTrackRequested(
+                                        newPlaylist.currentTrack!),
+                                  );
+                            },
+                          );
+                        },
+                      ),
+              ),
+            ],
           );
         },
       ),
@@ -172,26 +320,46 @@ class _TrackInfo extends StatelessWidget {
 
 class _PlaybackControls extends StatelessWidget {
   final PlayerStatus status;
+  final bool hasNext;
+  final bool hasPrevious;
   final VoidCallback onPlay;
   final VoidCallback onPause;
   final VoidCallback onStop;
+  final VoidCallback onSkipNext;
+  final VoidCallback onSkipPrevious;
 
   const _PlaybackControls({
     required this.status,
+    required this.hasNext,
+    required this.hasPrevious,
     required this.onPlay,
     required this.onPause,
     required this.onStop,
+    required this.onSkipNext,
+    required this.onSkipPrevious,
   });
 
   @override
   Widget build(BuildContext context) {
     final isPlaying = status == PlayerStatus.playing;
-    final isLoading = status == PlayerStatus.loading ||
-        status == PlayerStatus.buffering;
+    final isLoading =
+        status == PlayerStatus.loading || status == PlayerStatus.buffering;
 
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
+        // Skip previous
+        IconButton(
+          iconSize: 36,
+          icon: const Icon(Icons.skip_previous),
+          onPressed: hasPrevious ? onSkipPrevious : null,
+          color: hasPrevious
+              ? null
+              : Theme.of(context).colorScheme.outline.withValues(alpha: 0.3),
+        ),
+
+        const SizedBox(width: 8),
+
         // Stop
         IconButton(
           iconSize: 40,
@@ -199,7 +367,7 @@ class _PlaybackControls extends StatelessWidget {
           onPressed: status != PlayerStatus.idle ? onStop : null,
         ),
 
-        const SizedBox(width: 16),
+        const SizedBox(width: 8),
 
         // Play/Pause
         if (isLoading)
@@ -220,13 +388,16 @@ class _PlaybackControls extends StatelessWidget {
             onPressed: isPlaying ? onPause : onPlay,
           ),
 
-        const SizedBox(width: 16),
+        const SizedBox(width: 8),
 
-        // Skip (placeholder)
+        // Skip next
         IconButton(
-          iconSize: 40,
+          iconSize: 36,
           icon: const Icon(Icons.skip_next),
-          onPressed: null, // TODO: implement skip
+          onPressed: hasNext ? onSkipNext : null,
+          color: hasNext
+              ? null
+              : Theme.of(context).colorScheme.outline.withValues(alpha: 0.3),
         ),
       ],
     );
@@ -277,29 +448,59 @@ class _VolumeControl extends StatelessWidget {
 
 class _FilePickerButton extends StatelessWidget {
   final ValueChanged<AudioTrack> onFilePicked;
+  final ValueChanged<AudioTrack> onAddToQueue;
 
-  const _FilePickerButton({required this.onFilePicked});
+  const _FilePickerButton({
+    required this.onFilePicked,
+    required this.onAddToQueue,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return OutlinedButton.icon(
-      onPressed: () => _pickFile(context),
-      icon: const Icon(Icons.folder_open),
-      label: const Text('Choisir un fichier audio'),
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        OutlinedButton.icon(
+          onPressed: () => _pickFile(context, addToQueue: false),
+          icon: const Icon(Icons.folder_open),
+          label: const Text('Charger'),
+        ),
+        const SizedBox(width: 12),
+        OutlinedButton.icon(
+          onPressed: () => _pickFile(context, addToQueue: true),
+          icon: const Icon(Icons.playlist_add),
+          label: const Text('Ajouter à la file'),
+        ),
+      ],
     );
   }
 
-  Future<void> _pickFile(BuildContext context) async {
+  Future<void> _pickFile(BuildContext context,
+      {required bool addToQueue}) async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.audio,
-      allowMultiple: false,
+      allowMultiple: true,
     );
 
     if (result != null && result.files.isNotEmpty) {
-      final file = result.files.first;
-      if (file.path != null) {
-        final track = AudioTrack.fromFilePath(file.path!);
-        onFilePicked(track);
+      for (final file in result.files) {
+        if (file.path != null) {
+          final track = AudioTrack.fromFilePath(file.path!);
+          if (addToQueue) {
+            onAddToQueue(track);
+          } else {
+            onFilePicked(track);
+            // If multiple selected, add the rest to queue
+            if (result.files.length > 1) {
+              for (final remaining in result.files.skip(1)) {
+                if (remaining.path != null && remaining.path != file.path) {
+                  onAddToQueue(AudioTrack.fromFilePath(remaining.path!));
+                }
+              }
+            }
+            break;
+          }
+        }
       }
     }
   }

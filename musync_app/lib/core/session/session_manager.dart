@@ -433,6 +433,14 @@ class SessionManager {
       case ClientEventType.seekCommand:
         _handleSeekCommand(event);
         break;
+      case ClientEventType.skipNextCommand:
+        _logger.i('Received skip next from host');
+        // Skip is handled at the player level, just log
+        break;
+      case ClientEventType.skipPrevCommand:
+        _logger.i('Received skip prev from host');
+        // Skip is handled at the player level, just log
+        break;
       case ClientEventType.fileTransferMessage:
         _handleFileTransferMessage(event);
         break;

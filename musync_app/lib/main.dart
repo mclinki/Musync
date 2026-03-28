@@ -3,13 +3,19 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:uuid/uuid.dart';
 import 'package:firebase_analytics/firebase_analytics.dart';
 import 'core/core.dart';
+import 'core/services/permission_service.dart';
 import 'features/discovery/ui/discovery_screen.dart';
 import 'features/player/ui/player_screen.dart';
+import 'features/settings/ui/settings_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 1. Initialize Firebase (optional - app works without it)
+  // 1. Request runtime permissions (Android 13+)
+  final permissions = PermissionService();
+  await permissions.requestAllPermissions();
+
+  // 2. Initialize Firebase (optional - app works without it)
   final firebase = FirebaseService();
   try {
     await firebase.initialize();
@@ -17,13 +23,13 @@ void main() async {
     // Firebase not configured - app continues without it
   }
 
-  // 2. Create session manager
+  // 3. Create session manager
   final sessionManager = SessionManager();
 
-  // 3. Generate device ID
+  // 4. Generate device ID
   final deviceId = const Uuid().v4();
 
-  // 4. Initialize session manager
+  // 5. Initialize session manager
   await sessionManager.initialize(
     deviceId: deviceId,
     deviceName: 'MusyncMIMO Device',
@@ -83,6 +89,7 @@ class MusyncApp extends StatelessWidget {
           '/': (context) => const HomeScreen(),
           '/discovery': (context) => const DiscoveryScreen(),
           '/player': (context) => const PlayerScreen(),
+          '/settings': (context) => const SettingsScreen(),
         },
         // Firebase Analytics observer
         navigatorObservers: <NavigatorObserver>[
@@ -103,6 +110,14 @@ class HomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () => Navigator.of(context).pushNamed('/settings'),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(24),

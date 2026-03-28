@@ -1,5 +1,6 @@
 #!/usr/bin/env dart
 
+// ignore_for_file: avoid_print
 /// MusyncMIMO Clock Sync Performance Analyzer
 /// 
 /// This script measures the performance of the NTP-like clock synchronization

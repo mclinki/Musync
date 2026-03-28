@@ -149,6 +149,20 @@ class WebSocketServer {
     await broadcast(message);
   }
 
+  /// Broadcast a skip-next command to all slaves.
+  Future<void> broadcastSkipNext() async {
+    final message = ProtocolMessage.skipNext();
+    _logger.i('Broadcasting skip next');
+    await broadcast(message);
+  }
+
+  /// Broadcast a skip-prev command to all slaves.
+  Future<void> broadcastSkipPrev() async {
+    final message = ProtocolMessage.skipPrev();
+    _logger.i('Broadcasting skip prev');
+    await broadcast(message);
+  }
+
   /// Send a message to a specific slave.
   Future<void> sendToSlave(String deviceId, ProtocolMessage message) async {
     final slave = _slaves[deviceId];

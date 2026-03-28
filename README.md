@@ -7,8 +7,8 @@ Turn any collection of phones, tablets, or speakers into a synchronized multi-ro
 [![Flutter](https://img.shields.io/badge/Flutter-3.27-blue.svg)](https://flutter.dev)
 [![Dart](https://img.shields.io/badge/Dart-3.6-blue.svg)](https://dart.dev)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-32%2F32-passing-brightgreen.svg)](musync_app/test/)
-[![Version](https://img.shields.io/badge/Version-0.1.2-blue.svg)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/Tests-48%2F48-passing-brightgreen.svg)](musync_app/test/)
+[![Version](https://img.shields.io/badge/Version-0.1.3-blue.svg)](CHANGELOG.md)
 
 ---
 
@@ -16,12 +16,15 @@ Turn any collection of phones, tablets, or speakers into a synchronized multi-ro
 
 - **Multi-device sync** — Play music simultaneously on up to 9 devices (1 host + 8 slaves)
 - **NTP-like clock sync** — Achieves ±10-30ms accuracy over Wi-Fi
+- **Queue / playlist** — Add multiple tracks, skip next/prev, auto-advance
 - **Local file playback** — Pick any audio file from your device
 - **URL streaming** — Play audio from any direct URL
-- **Auto-discovery** — Devices find each other via TCP subnet scan
+- **mDNS discovery** — Real mDNS (multicast DNS) + TCP subnet fallback
 - **Auto-reconnection** — Seamless recovery from network hiccups
 - **Background playback** — Android foreground service keeps sessions alive
 - **File transfer** — Host automatically shares local files with slaves
+- **Runtime permissions** — Android 13+ (NEARBY_WIFI_DEVICES, READ_MEDIA_AUDIO)
+- **Settings** — Theme, device name, default volume, cache management
 
 ---
 
@@ -29,7 +32,7 @@ Turn any collection of phones, tablets, or speakers into a synchronized multi-ro
 
 | Platform | Chemin | Statut |
 |----------|--------|--------|
-| **Android** | `musync_app/build/app/outputs/flutter-apk/app-debug.apk` | ✅ v0.1.2 |
+| **Android** | `musync_app/build/app/outputs/flutter-apk/app-debug.apk` | ✅ v0.1.3 |
 | **iOS** | Build via Xcode (`flutter build ios`) | ⚠️ Nécessite macOS |
 
 > **Note** : Les fichiers APK ne sont pas inclus dans le dépôt GitHub (trop volumineux). 
@@ -44,22 +47,22 @@ MusyncMIMO/
 ├── musync_app/
 │   ├── lib/
 │   │   ├── core/
-│   │   │   ├── models/           # DeviceInfo, AudioSession, ProtocolMessage
+│   │   │   ├── models/           # DeviceInfo, AudioSession, ProtocolMessage, Playlist
 │   │   │   ├── network/          # ClockSync, WebSocket, mDNS discovery
 │   │   │   ├── audio/            # AudioEngine (just_audio wrapper)
 │   │   │   ├── session/          # SessionManager (orchestrator)
-│   │   │   └── services/         # Firebase, ForegroundService, FileTransfer
+│   │   │   └── services/         # Firebase, ForegroundService, FileTransfer, Permissions
 │   │   ├── features/
 │   │   │   ├── discovery/        # Device discovery UI + BLoC
-│   │   │   └── player/           # Audio player UI + BLoC
+│   │   │   ├── player/           # Audio player UI + BLoC (queue, skip)
+│   │   │   └── settings/         # Settings screen
 │   │   └── main.dart
-│   ├── test/                     # Unit tests (32 tests)
+│   ├── test/                     # Unit & BLoC tests (48 tests)
 │   ├── android/                  # Android config + ForegroundService
 │   └── ios/                      # iOS config
-├── 00-RESUME-EXECUTIF.md         # Executive summary
-├── 03-ARCHITECTURE-TECHNIQUE.md  # Technical architecture
-├── 05-MVP.md                     # MVP specification
-└── RAPPORT_J1.md                 # Day 1 analysis report
+├── CHANGELOG.md                  # Version history
+├── TASKS_BACKLOG.md              # Remaining tasks
+└── README.md                     # This file
 ```
 
 ---
@@ -157,7 +160,7 @@ Firebase is optional — the app works without it. To enable:
 | Command latency | < 500ms | ✅ < 100ms on LAN |
 | Discovery time | < 5s | ✅ 2-4s via mDNS |
 | Max devices | 9 (1+8) | ✅ Tested |
-| Tests | 32/32 | ✅ All passing |
+| Tests | 48/48 | ✅ All passing |
 
 ---
 
@@ -191,19 +194,23 @@ flutter analyze
 
 ### ✅ MVP (v0.1) — Done
 - [x] Local file playback
-- [x] Device discovery (mDNS)
+- [x] Device discovery (mDNS + TCP fallback)
 - [x] Session creation & joining
 - [x] Synchronized playback
 - [x] Play/pause/seek controls
 - [x] Volume control
 - [x] Auto-reconnection
 - [x] Background playback (Android)
+- [x] Queue / playlist support
+- [x] Skip next/prev
+- [x] Runtime permissions (Android 13+)
+- [x] Settings screen
 
 ### 🔜 v0.2
 - [ ] Per-device volume control
 - [ ] Saved groups (Firestore)
 - [ ] ID3 metadata display
-- [ ] Queue / playlist support
+- [ ] BLoC tests (Discovery)
 
 ### 🔮 v1.0
 - [ ] WSS/TLS encryption

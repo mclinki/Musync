@@ -41,4 +41,13 @@
 
 ---
 
+## ✅ Tâches P0 complétées (v0.1.3)
+
+- [x] **P0-1** : Système de queue/playlist + skip next/prev
+- [x] **P0-2** : Vrai mDNS publishing (multicast_dns)
+- [x] **P0-3** : Permissions runtime Android 13+ (permission_handler)
+- [x] **FIX** : Export file_transfer_service.dart dans core.dart
+
+---
+
 *Dernière mise à jour : 28 Mars 2026*

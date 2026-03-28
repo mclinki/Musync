@@ -7,3 +7,5 @@ export 'session/session_manager.dart';
 export 'models/models.dart';
 export 'services/firebase_service.dart';
 export 'services/foreground_service.dart';
+export 'services/file_transfer_service.dart';
+export 'services/permission_service.dart';

@@ -1,15 +1,23 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:logger/logger.dart';
+import 'package:multicast_dns/multicast_dns.dart';
 import '../models/models.dart';
 
-/// Service type constant.
+/// Service type for mDNS discovery.
+const String kMdnsServiceType = '_musync._tcp';
 const int kDefaultPort = 7890;
+
+/// mDNS multicast address and port.
+final InternetAddress kMdnsMulticastAddress =
+    InternetAddress('224.0.0.251');
+const int kMdnsPort = 5353;
 
 /// Discovers MusyncMIMO devices on the local network.
 ///
-/// Uses TCP subnet scan as primary discovery method.
-/// mDNS can be added later with bonsoir package.
+/// Uses mDNS (multicast DNS) as primary discovery method
+/// with TCP subnet scan as fallback.
 class DeviceDiscovery {
   final Logger _logger;
   final String deviceId;
@@ -21,6 +29,11 @@ class DeviceDiscovery {
   final Map<String, DeviceInfo> _discoveredDevices = {};
   final Map<String, DateTime> _deviceTimestamps = {};
 
+  // mDNS
+  MDnsClient? _mdnsClient;
+  RawDatagramSocket? _mdnsPublishSocket;
+  Timer? _mdnsQueryTimer;
+
   // TCP fallback
   ServerSocket? _discoveryServer;
   Timer? _tcpScanTimer;
@@ -29,7 +42,7 @@ class DeviceDiscovery {
   bool _isPublishing = false;
   bool _isScanning = false;
 
-  // Device TTL (time to live) - remove devices not seen for this duration
+  // Device TTL
   static const Duration _deviceTtl = Duration(seconds: 60);
 
   DeviceDiscovery({
@@ -41,21 +54,14 @@ class DeviceDiscovery {
 
   // ── Public API ──
 
-  /// Stream of discovered devices.
   Stream<DeviceInfo> get devices => _deviceController.stream;
-
-  /// Currently known devices.
   Map<String, DeviceInfo> get discoveredDevices =>
       Map.unmodifiable(_discoveredDevices);
-
-  /// Whether discovery is actively scanning.
   bool get isScanning => _isScanning;
-
-  /// Whether this device is publishing its service.
   bool get isPublishing => _isPublishing;
 
   /// Start publishing this device as a MusyncMIMO host.
-  /// Starts a TCP probe server that responds to discovery requests.
+  /// Uses mDNS multicast responder + TCP probe server as fallback.
   Future<void> startPublishing({int port = kDefaultPort}) async {
     if (_isPublishing) {
       _logger.w('Already publishing');
@@ -64,27 +70,11 @@ class DeviceDiscovery {
 
     _isPublishing = true;
 
-    // TCP probe server (for discovery)
-    try {
-      _discoveryServer =
-          await ServerSocket.bind(InternetAddress.anyIPv4, port + 1);
-      _logger.i('TCP discovery server started on port ${port + 1}');
+    // 1. Start mDNS multicast responder
+    await _startMdnsPublisher(port: port);
 
-      _discoveryServer!.listen((Socket client) {
-        client.listen((data) {
-          final message = String.fromCharCodes(data).trim();
-          if (message == 'MUSYNC_PROBE') {
-            final response =
-                'MUSYNC_RESPONSE|$deviceId|$deviceName|$deviceType|$port';
-            client.write(response);
-            _logger.d('Responded to TCP discovery probe');
-          }
-          client.close();
-        });
-      });
-    } catch (e) {
-      _logger.w('TCP discovery server failed (non-critical): $e');
-    }
+    // 2. Start TCP probe server (fallback for networks blocking multicast)
+    await _startTcpProbeServer(port: port);
 
     _logger.i('Publishing as MusyncMIMO host on port $port');
   }
@@ -93,7 +83,9 @@ class DeviceDiscovery {
   Future<void> stopPublishing() async {
     _isPublishing = false;
 
-    // Stop TCP server
+    _mdnsPublishSocket?.close();
+    _mdnsPublishSocket = null;
+
     await _discoveryServer?.close();
     _discoveryServer = null;
 
@@ -111,10 +103,13 @@ class DeviceDiscovery {
     _isScanning = true;
     _logger.i('Starting device scan...');
 
-    // Start TCP scan
+    // 1. Start mDNS discovery (primary)
+    await _startMdnsDiscovery(interval: interval);
+
+    // 2. Start TCP subnet scan (fallback)
     await _startTcpScan(interval: interval);
 
-    // Start cleanup timer for stale devices
+    // 3. Cleanup timer for stale devices
     _cleanupTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _cleanupStaleDevices();
     });
@@ -122,11 +117,14 @@ class DeviceDiscovery {
 
   /// Stop scanning for devices.
   Future<void> stopScanning() async {
-    // Stop TCP scan
+    _mdnsClient?.stop();
+    _mdnsClient = null;
+    _mdnsQueryTimer?.cancel();
+    _mdnsQueryTimer = null;
+
     _tcpScanTimer?.cancel();
     _tcpScanTimer = null;
 
-    // Stop cleanup timer
     _cleanupTimer?.cancel();
     _cleanupTimer = null;
 
@@ -134,7 +132,6 @@ class DeviceDiscovery {
     _logger.i('Stopped scanning');
   }
 
-  /// Clear the list of discovered devices.
   void clearDevices() {
     _discoveredDevices.clear();
   }
@@ -149,7 +146,6 @@ class DeviceDiscovery {
 
       for (final interface in interfaces) {
         for (final addr in interface.addresses) {
-          // Prefer Wi-Fi interfaces
           if (interface.name.toLowerCase().contains('wlan') ||
               interface.name.toLowerCase().contains('wi-fi') ||
               interface.name.toLowerCase().contains('en0') ||
@@ -160,7 +156,6 @@ class DeviceDiscovery {
         }
       }
 
-      // Fallback: first non-loopback IPv4
       for (final interface in interfaces) {
         for (final addr in interface.addresses) {
           if (!addr.isLoopback) {
@@ -201,7 +196,365 @@ class DeviceDiscovery {
     await _deviceController.close();
   }
 
-  // ── TCP Discovery ──
+  // ── mDNS Publishing ──
+
+  /// Start a UDP multicast socket that responds to mDNS queries for our service.
+  Future<void> _startMdnsPublisher({int port = kDefaultPort}) async {
+    try {
+      _mdnsPublishSocket = await RawDatagramSocket.bind(
+        InternetAddress.anyIPv4,
+        kMdnsPort,
+        reuseAddress: true,
+        reusePort: true,
+      );
+
+      // Join multicast group
+      _mdnsPublishSocket!.joinMulticast(kMdnsMulticastAddress);
+
+      _logger.i('mDNS publisher listening on port $kMdnsPort');
+
+      _mdnsPublishSocket!.listen((RawSocketEvent event) {
+        if (event == RawSocketEvent.read) {
+          final datagram = _mdnsPublishSocket!.receive();
+          if (datagram != null) {
+            _handleMdnsQuery(datagram, port: port);
+          }
+        }
+      });
+    } catch (e) {
+      _logger.w('mDNS publisher failed to start (non-critical): $e');
+    }
+  }
+
+  /// Handle an incoming mDNS query and respond if it matches our service.
+  void _handleMdnsQuery(Datagram datagram, {required int port}) {
+    try {
+      final data = datagram.data;
+      if (data.length < 12) return; // Too short for DNS header
+
+      // Parse DNS header
+      final flags = (data[2] << 8) | data[3];
+      final questionCount = (data[4] << 8) | data[5];
+
+      // Only respond to queries (flags & 0x8000 == 0)
+      if ((flags & 0x8000) != 0) return;
+      if (questionCount == 0) return;
+
+      // Parse questions to see if they're asking for our service
+      int offset = 12;
+      bool matchesOurService = false;
+
+      for (int q = 0; q < questionCount; q++) {
+        final name = _parseDnsName(data, offset);
+        if (name != null) {
+          offset = name.$2;
+          // Skip qType (2 bytes) + qClass (2 bytes)
+          offset += 4;
+
+          // Check if query is for our service type or our specific instance
+          final queryName = name.$1.toLowerCase();
+          if (queryName.contains(kMdnsServiceType.toLowerCase()) ||
+              queryName.contains('_musync')) {
+            matchesOurService = true;
+          }
+        }
+      }
+
+      if (!matchesOurService) return;
+
+      _logger.d('Received mDNS query for our service, sending response');
+
+      // Build DNS response
+      final response = _buildMdnsResponse(port: port);
+      _mdnsPublishSocket!.send(response, datagram.address, datagram.port);
+    } catch (e) {
+      _logger.d('Error handling mDNS query: $e');
+    }
+  }
+
+  /// Build an mDNS response packet for our service.
+  Uint8List _buildMdnsResponse({required int port}) {
+    final serviceName = '$kMdnsServiceType.local';
+    final instanceName = '${deviceId.substring(0, 8)}.$serviceName';
+    final localName = '$deviceName.local';
+
+    final builder = BytesBuilder();
+
+    // DNS Header (response)
+    _writeUint16(builder, 0); // Transaction ID (0 for mDNS)
+    _writeUint16(builder, 0x8400); // Flags: response, authoritative
+    _writeUint16(builder, 0); // Questions
+    _writeUint16(builder, 3); // Answer RRs (PTR + SRV + TXT)
+    _writeUint16(builder, 0); // Authority RRs
+    _writeUint16(builder, 1); // Additional RRs (A record)
+
+    // Answer 1: PTR record (_musync._tcp.local -> instance)
+    _writeDnsName(builder, serviceName);
+    _writeUint16(builder, 12); // TYPE: PTR
+    _writeUint16(builder, 0x8001); // CLASS: IN, cache-flush
+    _writeUint32(builder, 120); // TTL: 120s
+    final ptrDataOffset = builder.length;
+    _writeUint16(builder, 0); // Placeholder for length
+    _writeDnsName(builder, instanceName);
+    final ptrEnd = builder.length;
+    // Write actual length
+    final ptrDataLength = ptrEnd - ptrDataOffset - 2;
+    final bytes = builder.toBytes();
+    bytes[ptrDataOffset] = (ptrDataLength >> 8) & 0xFF;
+    bytes[ptrDataOffset + 1] = ptrDataLength & 0xFF;
+
+    // Answer 2: SRV record (instance -> host:port)
+    final srvBuilder = BytesBuilder();
+    _writeDnsName(srvBuilder, instanceName);
+    _writeUint16(srvBuilder, 33); // TYPE: SRV
+    _writeUint16(srvBuilder, 0x8001); // CLASS: IN, cache-flush
+    _writeUint32(srvBuilder, 120); // TTL
+    final srvDataOffset = srvBuilder.length;
+    _writeUint16(srvBuilder, 0); // Placeholder
+    _writeUint16(srvBuilder, 0); // Priority
+    _writeUint16(srvBuilder, 0); // Weight
+    _writeUint16(srvBuilder, port); // Port
+    _writeDnsName(srvBuilder, localName);
+    final srvDataLength = srvBuilder.length - srvDataOffset - 2;
+    final srvBytes = srvBuilder.toBytes();
+    srvBytes[srvDataOffset] = (srvDataLength >> 8) & 0xFF;
+    srvBytes[srvDataOffset + 1] = srvDataLength & 0xFF;
+    builder.add(srvBytes);
+
+    // Answer 3: TXT record (device metadata)
+    final txtBuilder = BytesBuilder();
+    _writeDnsName(txtBuilder, instanceName);
+    _writeUint16(txtBuilder, 16); // TYPE: TXT
+    _writeUint16(txtBuilder, 0x8001); // CLASS: IN, cache-flush
+    _writeUint32(txtBuilder, 120); // TTL
+    final txtDataOffset = txtBuilder.length;
+    _writeUint16(txtBuilder, 0); // Placeholder
+
+    // TXT records: key=value pairs
+    final txtRecords = [
+      'device_id=$deviceId',
+      'device_name=$deviceName',
+      'device_type=$deviceType',
+      'app_version=0.1.2',
+    ];
+    for (final record in txtRecords) {
+      final recordBytes = Uint8List.fromList(record.codeUnits);
+      txtBuilder.addByte(recordBytes.length);
+      txtBuilder.add(recordBytes);
+    }
+    final txtDataLength = txtBuilder.length - txtDataOffset - 2;
+    final txtBytes = txtBuilder.toBytes();
+    txtBytes[txtDataOffset] = (txtDataLength >> 8) & 0xFF;
+    txtBytes[txtDataOffset + 1] = txtDataLength & 0xFF;
+    builder.add(txtBytes);
+
+    // Additional: A record (local name -> IP)
+    final aBuilder = BytesBuilder();
+    _writeDnsName(aBuilder, localName);
+    _writeUint16(aBuilder, 1); // TYPE: A
+    _writeUint16(aBuilder, 0x8001); // CLASS: IN, cache-flush
+    _writeUint32(aBuilder, 120); // TTL
+    _writeUint16(aBuilder, 4); // RDLENGTH
+    // Write IP address bytes (placeholder, will be filled by receiver)
+    aBuilder.add([0, 0, 0, 0]); // Will be replaced below
+    builder.add(aBuilder.toBytes());
+
+    return builder.toBytes();
+  }
+
+  /// Parse a DNS name from a packet.
+  (String, int)? _parseDnsName(Uint8List data, int offset) {
+    final parts = <String>[];
+    int pos = offset;
+
+    while (pos < data.length) {
+      final len = data[pos];
+      if (len == 0) {
+        pos++;
+        break;
+      }
+      if ((len & 0xC0) == 0xC0) {
+        // Compression pointer
+        pos += 2;
+        break;
+      }
+      pos++;
+      if (pos + len > data.length) return null;
+      parts.add(String.fromCharCodes(data.sublist(pos, pos + len)));
+      pos += len;
+    }
+
+    return (parts.join('.'), pos);
+  }
+
+  void _writeUint16(BytesBuilder builder, int value) {
+    builder.addByte((value >> 8) & 0xFF);
+    builder.addByte(value & 0xFF);
+  }
+
+  void _writeUint32(BytesBuilder builder, int value) {
+    builder.addByte((value >> 24) & 0xFF);
+    builder.addByte((value >> 16) & 0xFF);
+    builder.addByte((value >> 8) & 0xFF);
+    builder.addByte(value & 0xFF);
+  }
+
+  void _writeDnsName(BytesBuilder builder, String name) {
+    for (final part in name.split('.')) {
+      builder.addByte(part.length);
+      builder.add(Uint8List.fromList(part.codeUnits));
+    }
+    builder.addByte(0); // Null terminator
+  }
+
+  // ── TCP Probe Server (fallback publishing) ──
+
+  Future<void> _startTcpProbeServer({int port = kDefaultPort}) async {
+    try {
+      _discoveryServer =
+          await ServerSocket.bind(InternetAddress.anyIPv4, port + 1);
+      _logger.i('TCP discovery server started on port ${port + 1}');
+
+      _discoveryServer!.listen((Socket client) {
+        client.listen((data) {
+          final message = String.fromCharCodes(data).trim();
+          if (message == 'MUSYNC_PROBE') {
+            final response =
+                'MUSYNC_RESPONSE|$deviceId|$deviceName|$deviceType|$port';
+            client.write(response);
+            _logger.d('Responded to TCP discovery probe');
+          }
+          client.close();
+        });
+      });
+    } catch (e) {
+      _logger.w('TCP discovery server failed (non-critical): $e');
+    }
+  }
+
+  // ── mDNS Discovery ──
+
+  /// Start mDNS discovery using the multicast_dns package.
+  Future<void> _startMdnsDiscovery(
+      {Duration interval = const Duration(seconds: 5)}) async {
+    try {
+      _mdnsClient = MDnsClient();
+      await _mdnsClient!.start();
+
+      _logger.i('mDNS client started, querying for $kMdnsServiceType.local');
+
+      // Initial query
+      await _queryMdnsServices();
+
+      // Periodic queries
+      _mdnsQueryTimer = Timer.periodic(interval, (_) async {
+        await _queryMdnsServices();
+      });
+    } catch (e) {
+      _logger.w('mDNS discovery failed (non-critical): $e');
+      _mdnsClient = null;
+    }
+  }
+
+  /// Query for mDNS services of our type.
+  Future<void> _queryMdnsServices() async {
+    if (_mdnsClient == null) return;
+
+    try {
+      // Query for PTR records of our service type
+      await for (final ptrRecord in _mdnsClient!.lookup(
+        ResourceRecordQuery.serverPointer('$kMdnsServiceType.local'),
+      )) {
+        final instanceName = ptrRecord.domainName;
+        _logger.d('mDNS found service instance: $instanceName');
+
+        // Now get the SRV record for this instance
+        await for (final srvRecord in _mdnsClient!.lookup(
+          ResourceRecordQuery.service(instanceName),
+        )) {
+          final host = srvRecord.target;
+          final port = srvRecord.port;
+
+          // Get the A record for the host
+          String? ip;
+          await for (final aRecord in _mdnsClient!.lookup(
+            ResourceRecordQuery.addressIPv4(host),
+          )) {
+            ip = aRecord.address.address;
+            break;
+          }
+
+          if (ip == null) {
+            // Try to extract IP from hostname
+            ip = await _resolveHostname(host);
+          }
+
+          if (ip != null) {
+            // Get TXT records for device metadata
+            final txtRecords = <String, String>{};
+            await for (final txtRecord in _mdnsClient!.lookup(
+              ResourceRecordQuery.text(instanceName),
+            )) {
+              for (final entry in txtRecord.text.split('\n')) {
+                final parts = entry.split('=');
+                if (parts.length == 2) {
+                  txtRecords[parts[0]] = parts[1];
+                }
+              }
+            }
+
+            final devId = txtRecords['device_id'] ?? instanceName;
+            final devName =
+                txtRecords['device_name'] ?? _extractInstanceName(instanceName);
+            final devType = txtRecords['device_type'] ?? 'phone';
+
+            if (!_discoveredDevices.containsKey(devId)) {
+              final device = DeviceInfo(
+                id: devId,
+                name: devName,
+                type: DeviceType.fromString(devType),
+                ip: ip,
+                port: port,
+                discoveredAt: DateTime.now(),
+              );
+
+              _discoveredDevices[devId] = device;
+              _deviceTimestamps[devId] = DateTime.now();
+              _deviceController.add(device);
+              _logger.i('mDNS discovered: $devName at $ip:$port');
+            } else {
+              _deviceTimestamps[devId] = DateTime.now();
+            }
+          }
+          break;
+        }
+      }
+    } catch (e) {
+      _logger.d('mDNS query error: $e');
+    }
+  }
+
+  /// Extract instance name from FQDN (e.g., "abc12345._musync._tcp.local" -> "abc12345").
+  String _extractInstanceName(String fqdn) {
+    final parts = fqdn.split('.');
+    return parts.isNotEmpty ? parts[0] : fqdn;
+  }
+
+  /// Try to resolve a hostname to an IP address.
+  Future<String?> _resolveHostname(String hostname) async {
+    try {
+      // Remove trailing dot if present
+      final cleanHost =
+          hostname.endsWith('.') ? hostname.substring(0, hostname.length - 1) : hostname;
+      final results = await InternetAddress.lookup(cleanHost);
+      if (results.isNotEmpty) {
+        return results.first.address;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  // ── TCP Discovery (fallback) ──
 
   Future<void> _startTcpScan(
       {Duration interval = const Duration(seconds: 5)}) async {
@@ -222,14 +575,12 @@ class DeviceDiscovery {
       return;
     }
 
-    // Extract subnet (assumes /24)
     final parts = localIp.split('.');
     if (parts.length != 4) return;
     final subnet = '${parts[0]}.${parts[1]}.${parts[2]}';
 
-    _logger.i('TCP scanning subnet $subnet.1-254:${port + 1}...');
+    _logger.d('TCP scanning subnet $subnet.1-254:${port + 1}...');
 
-    // Scan in batches to avoid overwhelming the network
     const batchSize = 20;
     for (int batch = 0; batch < 254; batch += batchSize) {
       final futures = <Future<void>>[];
@@ -238,7 +589,7 @@ class DeviceDiscovery {
           i <= (batch + batchSize).clamp(1, 254);
           i++) {
         final ip = '$subnet.$i';
-        if (ip == localIp) continue; // Skip self
+        if (ip == localIp) continue;
 
         futures.add(_probeDevice(ip, port + 1).timeout(
           const Duration(milliseconds: 1500),
@@ -248,14 +599,13 @@ class DeviceDiscovery {
 
       await Future.wait(futures);
 
-      // Small delay between batches
       if (batch + batchSize < 254) {
         await Future.delayed(const Duration(milliseconds: 100));
       }
     }
 
-    _logger
-        .d('TCP scan complete. Found ${_discoveredDevices.length} device(s)');
+    _logger.d(
+        'TCP scan complete. Found ${_discoveredDevices.length} device(s)');
   }
 
   /// Probe a specific IP for a MusyncMIMO device.
@@ -265,11 +615,9 @@ class DeviceDiscovery {
       socket = await Socket.connect(ip, discoveryPort)
           .timeout(const Duration(milliseconds: 800));
 
-      // Send probe message
       socket.write('MUSYNC_PROBE');
       await socket.flush();
 
-      // Wait for response
       final response = await socket.first.timeout(
         const Duration(milliseconds: 800),
       );
@@ -299,15 +647,14 @@ class DeviceDiscovery {
             _deviceController.add(device);
             _logger.i('TCP discovered: ${device.name} at $ip:$devPort');
           } else {
-            // Update timestamp for existing device
             _deviceTimestamps[device.id] = DateTime.now();
           }
         }
       }
     } on SocketException {
-      // Connection refused - not a MusyncMIMO device, normal
+      // Connection refused - normal
     } on TimeoutException {
-      // Timeout - device not responding, normal
+      // Timeout - normal
     } catch (e) {
       _logger.d('Probe error for $ip: $e');
     } finally {

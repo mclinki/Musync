@@ -5,6 +5,34 @@
 
 ---
 
+## Session du 2026-03-28 (v0.1.3)
+
+### Contexte
+Implémentation des 3 tâches P0 + P1 (tests, settings, cleanup).
+
+### Modifications
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 1 | `FEAT` | Modèle Playlist avec gestion de queue complète | `core/models/playlist.dart` (nouveau) |
+| 2 | `FEAT` | Skip next/prev dans PlayerBloc avec auto-advance | `features/player/bloc/player_bloc.dart` |
+| 3 | `FEAT` | UI queue (bottom sheet) + boutons skip prev/next | `features/player/ui/player_screen.dart` |
+| 4 | `FEAT` | Protocole skipNext/skipPrev + broadcast | `protocol_message.dart`, `websocket_server.dart`, `websocket_client.dart` |
+| 5 | `FEAT` | mDNS réel via multicast_dns (publishing + discovery) | `core/network/device_discovery.dart` |
+| 6 | `FEAT` | Service de permissions runtime (Android 13+) | `core/services/permission_service.dart` (nouveau) |
+| 7 | `FEAT` | Demande permissions au démarrage de l'app | `main.dart` |
+| 8 | `FEAT` | Écran Settings (thème, nom appareil, volume, cache) | `features/settings/ui/settings_screen.dart` (nouveau) |
+| 9 | `TEST` | Tests BLoC Player + modèle Playlist (16 tests) | `test/player_bloc_test.dart` (nouveau) |
+| 10 | `FIX` | Double subscription stateStream → memory leak | `player_bloc.dart` |
+| 11 | `FIX` | openAppSettingsPage() récursion infinie | `permission_service.dart` |
+| 12 | `FIX` | Export file_transfer_service + permission_service dans core.dart | `core/core.dart` |
+| 13 | `FIX` | Variables inutilisées (transactionId, qType, srv) | `device_discovery.dart` |
+| 14 | `CHORE` | Ajout dépendances multicast_dns + permission_handler | `pubspec.yaml` |
+| 15 | `CHORE` | Permission ACCESS_FINE_LOCATION dans manifest | `AndroidManifest.xml` |
+| 16 | `CHORE` | Lint ignore avoid_print pour CLI script | `bin/analyze_sync.dart` |
+
+---
+
 ## Session du 2026-03-28 (v0.1.2)
 
 ### Contexte

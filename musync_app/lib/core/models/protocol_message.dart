@@ -211,6 +211,14 @@ class ProtocolMessage {
     return ProtocolMessage(type: MessageType.audioReady);
   }
 
+  factory ProtocolMessage.skipNext() {
+    return ProtocolMessage(type: MessageType.skipNext);
+  }
+
+  factory ProtocolMessage.skipPrev() {
+    return ProtocolMessage(type: MessageType.skipPrev);
+  }
+
   factory ProtocolMessage.error({required String message}) {
     return ProtocolMessage(
       type: MessageType.error,

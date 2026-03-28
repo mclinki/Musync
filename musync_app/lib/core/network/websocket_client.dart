@@ -309,6 +309,12 @@ class WebSocketClient {
         case MessageType.seek:
           _handleSeek(message);
           break;
+        case MessageType.skipNext:
+          _handleSkipNext(message);
+          break;
+        case MessageType.skipPrev:
+          _handleSkipPrev(message);
+          break;
         case MessageType.heartbeat:
           _handleHeartbeat();
           break;
@@ -431,6 +437,20 @@ class WebSocketClient {
     ));
   }
 
+  void _handleSkipNext(ProtocolMessage message) {
+    _logger.i('Received skip next command');
+    _eventController.add(const ClientEvent(
+      type: ClientEventType.skipNextCommand,
+    ));
+  }
+
+  void _handleSkipPrev(ProtocolMessage message) {
+    _logger.i('Received skip prev command');
+    _eventController.add(const ClientEvent(
+      type: ClientEventType.skipPrevCommand,
+    ));
+  }
+
   void _handleHeartbeat() {
     final ack = ProtocolMessage.heartbeatAck();
     _socket?.add(ack.encode());
@@ -491,6 +511,8 @@ enum ClientEventType {
   playCommand,
   pauseCommand,
   seekCommand,
+  skipNextCommand,
+  skipPrevCommand,
   fileTransferMessage,
   error,
 }
