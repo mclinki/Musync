@@ -119,6 +119,21 @@ class SyncQualityUpdated extends PlayerEvent {
   List<Object?> get props => [qualityLabel, offsetMs];
 }
 
+class _SyncingFilesChanged extends PlayerEvent {
+  final Set<String> files;
+  const _SyncingFilesChanged(this.files);
+  @override
+  List<Object?> get props => [files];
+}
+
+class _SyncingFileProgress extends PlayerEvent {
+  final String fileName;
+  final bool isComplete;
+  const _SyncingFileProgress({required this.fileName, required this.isComplete});
+  @override
+  List<Object?> get props => [fileName, isComplete];
+}
+
 // ── State ──
 
 class PlayerState extends Equatable {
@@ -131,6 +146,8 @@ class PlayerState extends Equatable {
   final String? errorMessage;
   final String? syncQualityLabel;
   final double? syncOffsetMs;
+  /// Set of filenames currently being synced to slaves (host) or received (guest).
+  final Set<String> syncingFiles;
 
   const PlayerState({
     this.status = PlayerStatus.idle,
@@ -142,6 +159,7 @@ class PlayerState extends Equatable {
     this.errorMessage,
     this.syncQualityLabel,
     this.syncOffsetMs,
+    this.syncingFiles = const {},
   });
 
   bool get hasNext => playlist.hasNext;
@@ -157,6 +175,7 @@ class PlayerState extends Equatable {
     String? errorMessage,
     String? syncQualityLabel,
     double? syncOffsetMs,
+    Set<String>? syncingFiles,
     bool clearTrack = false,
   }) {
     return PlayerState(
@@ -169,6 +188,7 @@ class PlayerState extends Equatable {
       errorMessage: errorMessage,
       syncQualityLabel: syncQualityLabel ?? this.syncQualityLabel,
       syncOffsetMs: syncOffsetMs ?? this.syncOffsetMs,
+      syncingFiles: syncingFiles ?? this.syncingFiles,
     );
   }
 
@@ -183,6 +203,7 @@ class PlayerState extends Equatable {
         errorMessage,
         syncQualityLabel,
         syncOffsetMs,
+        syncingFiles,
       ];
 }
 
@@ -204,6 +225,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
   StreamSubscription? _positionSub;
   StreamSubscription? _clientEventSub;
   StreamSubscription? _syncQualitySub;
+  StreamSubscription? _fileTransferSub;
 
   PlayerBloc({required this.sessionManager, Logger? logger})
       : _logger = logger ?? Logger(),
@@ -261,6 +283,26 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
         offsetMs: update.offsetMs,
       ));
     });
+
+    // Listen to file transfer progress for syncing indicators
+    _fileTransferSub = sessionManager.fileTransfer.progressStream.listen((progress) {
+      add(_SyncingFileProgress(
+        fileName: progress.fileName,
+        isComplete: progress.percentage >= 1.0,
+      ));
+    });
+    on<_SyncingFileProgress>((event, emit) {
+      final syncing = Set<String>.from(state.syncingFiles);
+      if (event.isComplete) {
+        syncing.remove(event.fileName);
+      } else {
+        syncing.add(event.fileName);
+      }
+      emit(state.copyWith(syncingFiles: syncing));
+    });
+    on<_SyncingFilesChanged>((event, emit) {
+      emit(state.copyWith(syncingFiles: event.files));
+    });
   }
 
   Future<void> _onLoadTrack(
@@ -292,34 +334,87 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     }
   }
 
-  void _onAddToQueue(
+  Future<void> _onAddToQueue(
     AddToQueueRequested event,
     Emitter<PlayerState> emit,
-  ) {
+  ) async {
     final newPlaylist = state.playlist.addTrack(event.track);
     emit(state.copyWith(playlist: newPlaylist));
     _logger.i('Added to queue: ${event.track.title} (${newPlaylist.length} tracks)');
+
+    // Auto-sync to slaves if host and there are connected slaves
+    if (sessionManager.role == DeviceRole.host &&
+        event.track.sourceType == AudioSourceType.localFile) {
+      final fileName = event.track.source.split('/').last.split('\\').last;
+      // Use local variable instead of reading state after emit
+      final syncing = Set<String>.from(state.syncingFiles)..add(fileName);
+      emit(state.copyWith(syncingFiles: syncing));
+      _logger.i('Auto-syncing track to slaves: $fileName');
+      try {
+        await sessionManager.syncTrackToSlaves(event.track);
+        syncing.remove(fileName);
+        emit(state.copyWith(syncingFiles: syncing));
+        _logger.i('Track synced to slaves: $fileName');
+      } catch (e) {
+        _logger.e('Failed to sync track to slaves: $e');
+        syncing.remove(fileName);
+        emit(state.copyWith(syncingFiles: syncing));
+      }
+    }
   }
 
-  void _onRemoveFromQueue(
+  Future<void> _onRemoveFromQueue(
     RemoveFromQueueRequested event,
     Emitter<PlayerState> emit,
-  ) {
+  ) async {
+    final removedIndex = event.index;
+    final wasCurrentTrack = removedIndex == state.playlist.currentIndex;
+    final wasActive = state.status == PlayerStatus.playing ||
+        state.status == PlayerStatus.paused;
+
     final newPlaylist = state.playlist.removeTrack(event.index);
-    emit(state.copyWith(
-      playlist: newPlaylist,
-      currentTrack: newPlaylist.currentTrack,
-    ));
+
+    if (wasCurrentTrack && wasActive) {
+      // Removed the currently active track — stop playback
+      try {
+        if (sessionManager.role == DeviceRole.host) {
+          await sessionManager.pausePlayback();
+        }
+        await sessionManager.audioEngine.stop();
+      } catch (e) {
+        _logger.w('Error stopping after track removal: $e');
+      }
+      emit(state.copyWith(
+        playlist: newPlaylist,
+        currentTrack: newPlaylist.currentTrack,
+        status: newPlaylist.isEmpty ? PlayerStatus.idle : PlayerStatus.paused,
+        position: Duration.zero,
+      ));
+    } else {
+      emit(state.copyWith(
+        playlist: newPlaylist,
+        currentTrack: newPlaylist.currentTrack,
+      ));
+    }
   }
 
-  void _onClearQueue(
+  Future<void> _onClearQueue(
     ClearQueueRequested event,
     Emitter<PlayerState> emit,
-  ) {
+  ) async {
+    try {
+      if (sessionManager.role == DeviceRole.host) {
+        await sessionManager.pausePlayback();
+      }
+      await sessionManager.audioEngine.stop();
+    } catch (e) {
+      _logger.w('Error stopping on clear: $e');
+    }
     emit(state.copyWith(
       playlist: const Playlist(),
       clearTrack: true,
       status: PlayerStatus.idle,
+      position: Duration.zero,
     ));
   }
 
@@ -334,15 +429,22 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     }
 
     try {
-      // If resuming from pause, just resume instead of reloading the track
-      if (state.status == PlayerStatus.paused) {
+      // Determine if this is a true resume (same track already loaded and paused)
+      // or a fresh play (track loaded but never played, or different track)
+      final audioTrack = sessionManager.audioEngine.currentTrack;
+      final isTrueResume = state.status == PlayerStatus.paused &&
+          audioTrack != null &&
+          audioTrack.source == track.source;
+
+      if (isTrueResume) {
+        // Resume from pause
         if (sessionManager.role == DeviceRole.host) {
           await sessionManager.resumePlayback();
         } else {
           await sessionManager.audioEngine.play();
         }
       } else {
-        // Fresh play: load and play from start
+        // Fresh play: sync to slaves and play from start
         if (sessionManager.role == DeviceRole.host) {
           await sessionManager.playTrack(track, playlist: state.playlist);
         } else {
@@ -406,6 +508,10 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     Emitter<PlayerState> emit,
   ) async {
     try {
+      // Broadcast pause to slaves before stopping locally
+      if (sessionManager.role == DeviceRole.host) {
+        await sessionManager.pausePlayback();
+      }
       await sessionManager.audioEngine.stop();
       emit(state.copyWith(status: PlayerStatus.idle, position: Duration.zero));
     } catch (e, stack) {
@@ -643,6 +749,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     _positionSub?.cancel();
     _clientEventSub?.cancel();
     _syncQualitySub?.cancel();
+    _fileTransferSub?.cancel();
     return super.close();
   }
 }

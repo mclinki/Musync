@@ -329,6 +329,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
   StreamSubscription? _positionSub;
   StreamSubscription? _playlistSub;
   StreamSubscription? _syncQualitySub;
+  StreamSubscription? _fileTransferSub;
 
   DiscoveryBloc({required this.sessionManager, Logger? logger})
       : _logger = logger ?? Logger(),
@@ -396,6 +397,11 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
         quality = SyncQuality.degraded;
       }
       add(SyncQualityChanged(quality: quality, offsetMs: update.offsetMs));
+    });
+
+    // Listen to file transfer progress
+    _fileTransferSub = sessionManager.fileTransfer.progressStream.listen((progress) {
+      add(FileTransferProgressChanged(progress.percentage));
     });
   }
 
@@ -584,32 +590,39 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
           status: DiscoveryStatus.hosting,
           role: DeviceRole.host,
           connectedDeviceCount: session?.totalDevices ?? 1,
+          connectionDetail: ConnectionDetail.connected,
         ));
         break;
       case SessionManagerState.joined:
         emit(state.copyWith(
           status: DiscoveryStatus.joined,
           role: DeviceRole.slave,
+          connectionDetail: ConnectionDetail.connected,
         ));
         break;
       case SessionManagerState.playing:
-        // Also update playback state
         emit(state.copyWith(
           isPlaying: true,
+          connectionDetail: ConnectionDetail.connected,
         ));
         break;
       case SessionManagerState.paused:
         emit(state.copyWith(
           isPlaying: false,
+          connectionDetail: ConnectionDetail.connected,
+        ));
+        break;
+      case SessionManagerState.scanning:
+        emit(state.copyWith(
+          connectionDetail: ConnectionDetail.reconnecting,
         ));
         break;
       case SessionManagerState.error:
         emit(state.copyWith(
           status: DiscoveryStatus.error,
           errorMessage: 'Session error',
+          connectionDetail: ConnectionDetail.error,
         ));
-        break;
-      default:
         break;
     }
   }
@@ -668,6 +681,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
     _positionSub?.cancel();
     _playlistSub?.cancel();
     _syncQualitySub?.cancel();
+    _fileTransferSub?.cancel();
     return super.close();
   }
 }

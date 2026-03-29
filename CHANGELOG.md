@@ -5,6 +5,47 @@
 
 ---
 
+## Session du 2026-03-30 (v0.1.10)
+
+### Contexte
+2e passe de review complète de toutes les fonctions. 3 bugs supplémentaires détectés et corrigés.
+
+### Modifications
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 15 | `FIX` | Dialog nom appareil : `controller.dispose()` jamais appelé si dialog fermé par tap extérieur → fuite mémoire. Ajout `PopScope(onPopInvokedWithResult)` | `settings_screen.dart` |
+| 16 | `FIX` | Listener `progressStream` lit `state.syncingFiles` stale → race condition si 2 transferts finissent ensemble. Nouveau event `_SyncingFileProgress` traité dans handler BLoC | `player_bloc.dart` |
+| 17 | `FIX` | `_onRemoveFromQueue` ne stoppait que si `playing` → piste `paused` restée chargée dans l'engine. Vérifie maintenant `playing \|\| paused` | `player_bloc.dart` |
+
+---
+
+## Session du 2026-03-30 (v0.1.9)
+
+### Contexte
+Corrections de bugs suite aux tests : play ne lançait plus la musique, pas de synchronisation automatique, indicateurs latence/connexion non mis à jour, crash TextEditingController. Review complète de toutes les fonctions → 5 bugs supplémentaires trouvés et corrigés (passe 1). 3 bugs supplémentaires (passe 2).
+
+### Modifications
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 1 | `FIX` | Play ne lançait plus la musique : `resumePlayback()` appelé au lieu de `playTrack()` car `_currentSession.currentTrack` était null après `loadTrack`. Détection `isTrueResume` ajoutée | `player_bloc.dart` |
+| 2 | `FEAT` | Sync automatique des morceaux aux slaves dès ajout en playlist (sans lancer la lecture). Nouvelle méthode `syncTrackToSlaves()` | `session_manager.dart`, `player_bloc.dart` |
+| 3 | `FEAT` | Indicateur de synchronisation par piste dans la queue (CircularProgressIndicator + texte "Synchronisation..."). Nouveau champ `PlayerState.syncingFiles` | `player_bloc.dart`, `player_screen.dart` |
+| 4 | `FEAT` | Auto-preload sur slave quand file transfer complet (au lieu d'attendre le prepareCommand) | `session_manager.dart` |
+| 5 | `FIX` | `_handlePrepareCommand` : retry 5×500ms si fichier pas encore en cache (file transfer en cours) | `session_manager.dart` |
+| 6 | `FIX` | Indicateur latence : timer périodique (10s) émet `_emitSyncQuality()` côté slave après connexion | `session_manager.dart` |
+| 7 | `FIX` | Indicateur connexion : `_onSessionStateChanged` met à jour `connectionDetail` pour tous les états | `discovery_bloc.dart` |
+| 8 | `FIX` | File transfer progress : listener ajouté dans DiscoveryBloc pour afficher la progression côté guest | `discovery_bloc.dart` |
+| 9 | `FIX` | Crash `TextEditingController used after being disposed` dans dialog nom appareil | `settings_screen.dart` |
+| 10 | `FIX` | `_onAddToQueue` : `state.syncingFiles` lu après `emit()` → variable locale pour éviter race condition | `player_bloc.dart` |
+| 11 | `FIX` | `_onStop` ne broadcast pas aux slaves → ajout `pausePlayback()` avant stop local | `player_bloc.dart` |
+| 12 | `FIX` | `_onRemoveFromQueue` : arrêt lecture si suppression de la piste en cours | `player_bloc.dart` |
+| 13 | `FIX` | `_onClearQueue` : ajout `stop()` audio engine + `pausePlayback()` pour slaves | `player_bloc.dart` |
+| 14 | `FIX` | `syncTrackToSlaves` : ajout délai 500ms après `sendFile` avant `broadcastPrepare` | `session_manager.dart` |
+
+---
+
 ## Session du 2026-03-29 (v0.1.5)
 
 ### Contexte

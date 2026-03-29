@@ -121,6 +121,28 @@ class _PlayerView extends StatelessWidget {
                   ),
                 ],
 
+                // Syncing indicator
+                if (state.syncingFiles.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Synchronisation de ${state.syncingFiles.length} fichier(s)...',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Colors.orange,
+                            ),
+                      ),
+                    ],
+                  ),
+                ],
+
                 // Sync quality
                 if (state.syncQualityLabel != null) ...[
                   const SizedBox(height: 8),
@@ -215,6 +237,9 @@ class _PlayerView extends StatelessWidget {
                           final track = state.playlist.tracks[index];
                           final isCurrent =
                               index == state.playlist.currentIndex;
+                          // Check if this track is currently syncing
+                          final fileName = track.source.split('/').last.split('\\').last;
+                          final isSyncing = state.syncingFiles.contains(fileName);
                           return ListTile(
                             leading: CircleAvatar(
                               backgroundColor: isCurrent
@@ -222,10 +247,19 @@ class _PlayerView extends StatelessWidget {
                                   : Theme.of(context)
                                       .colorScheme
                                       .surfaceContainerHighest,
-                              child: isCurrent
-                                  ? const Icon(Icons.play_arrow,
-                                      color: Colors.white)
-                                  : Text('${index + 1}'),
+                              child: isSyncing
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : isCurrent
+                                      ? const Icon(Icons.play_arrow,
+                                          color: Colors.white)
+                                      : Text('${index + 1}'),
                             ),
                             title: Text(
                               track.title,
@@ -235,9 +269,12 @@ class _PlayerView extends StatelessWidget {
                                     : FontWeight.normal,
                               ),
                             ),
-                            subtitle: track.artist != null
-                                ? Text(track.artist!)
-                                : null,
+                            subtitle: isSyncing
+                                ? const Text('Synchronisation...',
+                                    style: TextStyle(color: Colors.orange))
+                                : track.artist != null
+                                    ? Text(track.artist!)
+                                    : null,
                             trailing: IconButton(
                               icon: const Icon(Icons.close, size: 20),
                               onPressed: () {

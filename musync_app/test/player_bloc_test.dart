@@ -10,6 +10,8 @@ class MockSessionManager extends Mock implements SessionManager {}
 
 class MockAudioEngine extends Mock implements AudioEngine {}
 
+class MockFileTransferService extends Mock implements FileTransferService {}
+
 class MockStream<T> extends Mock implements Stream<T> {}
 
 // ── Fakes ──
@@ -19,6 +21,7 @@ class FakeAudioTrack extends Fake implements AudioTrack {}
 void main() {
   late MockSessionManager sessionManager;
   late MockAudioEngine audioEngine;
+  late MockFileTransferService fileTransfer;
 
   setUpAll(() {
     registerFallbackValue(FakeAudioTrack());
@@ -28,10 +31,23 @@ void main() {
   setUp(() {
     sessionManager = MockSessionManager();
     audioEngine = MockAudioEngine();
+    fileTransfer = MockFileTransferService();
 
     // Stub audioEngine on sessionManager
     when(() => sessionManager.audioEngine).thenReturn(audioEngine);
     when(() => sessionManager.role).thenReturn(DeviceRole.none);
+    when(() => sessionManager.fileTransfer).thenReturn(fileTransfer);
+    when(() => sessionManager.clientEvents).thenReturn(null);
+
+    // Stub file transfer progress stream
+    when(() => fileTransfer.progressStream).thenAnswer(
+      (_) => Stream<TransferProgress>.fromIterable([]),
+    );
+
+    // Stub sync quality stream
+    when(() => sessionManager.syncQualityStream).thenAnswer(
+      (_) => Stream<SyncQualityUpdate>.fromIterable([]),
+    );
 
     // Stub audio engine streams
     when(() => audioEngine.stateStream).thenAnswer(
@@ -42,6 +58,7 @@ void main() {
     );
     when(() => audioEngine.position).thenReturn(Duration.zero);
     when(() => audioEngine.duration).thenReturn(const Duration(minutes: 3));
+    when(() => audioEngine.currentTrack).thenReturn(null);
   });
 
   group('PlayerBloc', () {
@@ -132,6 +149,9 @@ void main() {
       'PlayRequested plays when track is loaded (solo mode)',
       build: () {
         when(() => audioEngine.play()).thenAnswer((_) async {});
+        when(() => audioEngine.currentTrack).thenReturn(
+          AudioTrack.fromFilePath('/test/song.mp3'),
+        );
         return PlayerBloc(sessionManager: sessionManager);
       },
       seed: () => PlayerState(

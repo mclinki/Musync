@@ -56,6 +56,9 @@ class SessionManager {
   // Cached file path for slave playback
   String? _cachedFilePath;
 
+  // Periodic sync quality timer (slave side)
+  Timer? _syncQualityTimer;
+
   SessionManager({Logger? logger}) : _logger = logger ?? Logger() {
     _audioEngine = AudioEngine(logger: _logger);
     _fileTransfer = FileTransferService(logger: _logger);
@@ -251,6 +254,13 @@ class SessionManager {
     _role = DeviceRole.slave;
     _emitState(SessionManagerState.joined);
 
+    // Start periodic sync quality updates
+    _syncQualityTimer?.cancel();
+    _syncQualityTimer = Timer.periodic(
+      const Duration(seconds: AppConstants.autoCalibrationIntervalMs ~/ 1000),
+      (_) => _emitSyncQuality(),
+    );
+
     // Start foreground service to keep app alive in background
     await _foregroundService.start(title: 'MusyncMIMO - Connecté');
 
@@ -400,6 +410,35 @@ class SessionManager {
     _emitState(SessionManagerState.playing);
   }
 
+  /// Sync a track to slaves without playing it (host only).
+  /// Sends the file and broadcasts a prepare command so slaves can preload.
+  Future<void> syncTrackToSlaves(AudioTrack track) async {
+    if (_role != DeviceRole.host) return;
+    if (_server == null || _server!.slaveCount == 0) return;
+    if (track.sourceType != AudioSourceType.localFile) return;
+
+    _logger.i('Syncing track to slaves: ${track.title}');
+
+    String trackSource = track.source;
+    final sent = await _fileTransfer.sendFile(
+      filePath: track.source,
+      server: _server!,
+    );
+
+    if (sent) {
+      trackSource = track.source.split('/').last.split('\\').last;
+      _logger.i('File sent, broadcasting prepare for: $trackSource');
+      // Wait for slaves to save the file before sending prepare
+      await Future.delayed(const Duration(milliseconds: AppConstants.fileTransferWaitDelayMs));
+      await _server!.broadcastPrepare(
+        trackSource: trackSource,
+        sourceType: track.sourceType,
+      );
+    } else {
+      _logger.w('Failed to sync track to slaves');
+    }
+  }
+
   /// Leave the current session.
   Future<void> leaveSession() async {
     _logger.i('Leaving session...');
@@ -422,6 +461,10 @@ class SessionManager {
       await _client?.disconnect();
       _client = null;
     }
+
+    // Cancel periodic sync quality timer
+    _syncQualityTimer?.cancel();
+    _syncQualityTimer = null;
 
     await _audioEngine.stop();
 
@@ -578,11 +621,23 @@ class SessionManager {
       final cachedPath = '$cachePath/$trackSource';
       final cachedFile = File(cachedPath);
 
-      if (await cachedFile.exists()) {
-        trackSource = cachedPath;
-        _logger.d('File found in cache: $trackSource');
-      } else {
-        _logger.w('File not in cache yet, will check on play');
+      // Retry a few times in case file transfer is still in progress
+      bool found = false;
+      for (int i = 0; i < 5; i++) {
+        if (await cachedFile.exists()) {
+          trackSource = cachedPath;
+          _logger.d('File found in cache: $trackSource');
+          found = true;
+          break;
+        }
+        if (i < 4) {
+          _logger.d('File not in cache yet, retrying... (${i + 1}/5)');
+          await Future.delayed(const Duration(milliseconds: 500));
+        }
+      }
+
+      if (!found) {
+        _logger.w('File not in cache after retries, will check on play');
         return;
       }
     }
@@ -738,6 +793,18 @@ class SessionManager {
         final ack = ProtocolMessage.fileTransferAck();
         _client!.sendMessage(ack);
         _logger.d('Sent file transfer ACK to host');
+      }
+
+      // Auto-preload the track so it's ready when play command arrives
+      try {
+        final file = File(result);
+        if (await file.exists()) {
+          final track = AudioTrack.fromFilePath(result);
+          await _audioEngine.preloadTrack(track);
+          _logger.i('Auto-preloaded track after file transfer: ${track.title}');
+        }
+      } catch (e) {
+        _logger.w('Auto-preload after transfer failed (non-critical): $e');
       }
     } else {
       _logger.d('File transfer in progress or not complete yet');

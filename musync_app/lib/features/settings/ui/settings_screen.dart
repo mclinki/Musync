@@ -198,41 +198,54 @@ class _SettingsView extends StatelessWidget {
   }
 
   void _showDeviceNameDialog(BuildContext context, String currentName) {
-    final controller = TextEditingController(text: currentName);
     showDialog(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Nom de l\'appareil'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            hintText: 'Mon téléphone',
-            border: OutlineInputBorder(),
-          ),
-          maxLength: 30,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(dialogContext);
-            },
-            child: const Text('Annuler'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final name = controller.text.trim();
-              if (name.isNotEmpty) {
-                context
-                    .read<SettingsBloc>()
-                    .add(DeviceNameChanged(name));
-              }
-              Navigator.pop(dialogContext);
-            },
-            child: const Text('Enregistrer'),
-          ),
-        ],
-      ),
-    ).whenComplete(() => controller.dispose());
+      builder: (dialogContext) {
+        final controller = TextEditingController(text: currentName);
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return PopScope(
+              onPopInvokedWithResult: (didPop, result) {
+                controller.dispose();
+              },
+              child: AlertDialog(
+                title: const Text('Nom de l\'appareil'),
+                content: TextField(
+                  controller: controller,
+                  decoration: const InputDecoration(
+                    hintText: 'Mon téléphone',
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLength: 30,
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      controller.dispose();
+                      Navigator.pop(dialogContext);
+                    },
+                    child: const Text('Annuler'),
+                  ),
+                  FilledButton(
+                    onPressed: () {
+                      final name = controller.text.trim();
+                      if (name.isNotEmpty) {
+                        context
+                            .read<SettingsBloc>()
+                            .add(DeviceNameChanged(name));
+                      }
+                      controller.dispose();
+                      Navigator.pop(dialogContext);
+                    },
+                    child: const Text('Enregistrer'),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   void _confirmClearCache(BuildContext context) {
