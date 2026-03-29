@@ -394,6 +394,9 @@ class _DiscoveryView extends StatelessWidget {
                   position: position,
                   duration: duration,
                   isPlaying: isPlaying,
+                  onStop: () {
+                    sessionManager.audioEngine.stop();
+                  },
                 )
               else if (hasTrack)
                 const Card(
@@ -408,6 +411,18 @@ class _DiscoveryView extends StatelessWidget {
                     ),
                   ),
                 ),
+
+              const SizedBox(height: 16),
+
+              // ── Playlist from Host ──
+              if (state.playlistTracks.isNotEmpty)
+                _PlaylistCard(
+                  tracks: state.playlistTracks,
+                  currentIndex: state.playlistCurrentIndex,
+                ),
+
+              if (state.playlistTracks.isNotEmpty)
+                const SizedBox(height: 16),
 
               const SizedBox(height: 16),
 
@@ -960,11 +975,13 @@ class _PlaybackInfoCard extends StatelessWidget {
   final Duration position;
   final Duration duration;
   final bool isPlaying;
+  final VoidCallback? onStop;
 
   const _PlaybackInfoCard({
     required this.position,
     required this.duration,
     required this.isPlaying,
+    this.onStop,
   });
 
   @override
@@ -1011,10 +1028,18 @@ class _PlaybackInfoCard extends StatelessWidget {
 
             const SizedBox(height: 8),
 
-            // Read-only indicator
+            // Stop button + read-only indicator
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
+                if (onStop != null)
+                  IconButton(
+                    icon: const Icon(Icons.stop_circle_outlined),
+                    iconSize: 32,
+                    onPressed: onStop,
+                    tooltip: 'Arrêter localement',
+                  ),
+                if (onStop != null) const SizedBox(width: 16),
                 Icon(
                   Icons.lock,
                   size: 14,
@@ -1102,6 +1127,79 @@ class _VolumeCardState extends State<_VolumeCard> {
                 ),
               ],
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PlaylistCard extends StatelessWidget {
+  final List<Map<String, dynamic>> tracks;
+  final int currentIndex;
+
+  const _PlaylistCard({
+    required this.tracks,
+    required this.currentIndex,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.queue_music,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Playlist (${tracks.length})',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Divider(height: 1),
+            const SizedBox(height: 8),
+            ...tracks.asMap().entries.map((entry) {
+              final index = entry.key;
+              final track = entry.value;
+              final isCurrent = index == currentIndex;
+              final title = track['title'] as String? ?? 'Piste ${index + 1}';
+              final artist = track['artist'] as String?;
+
+              return ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: CircleAvatar(
+                  radius: 16,
+                  backgroundColor: isCurrent
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.surfaceContainerHighest,
+                  child: isCurrent
+                      ? const Icon(Icons.play_arrow, size: 16, color: Colors.white)
+                      : Text('${index + 1}', style: const TextStyle(fontSize: 12)),
+                ),
+                title: Text(
+                  title,
+                  style: TextStyle(
+                    fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                    fontSize: 13,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: artist != null
+                    ? Text(artist, style: const TextStyle(fontSize: 11))
+                    : null,
+              );
+            }),
           ],
         ),
       ),

@@ -35,6 +35,9 @@ enum MessageType {
   fileTransferEnd,    // File transfer complete
   fileTransferAck,    // Slave confirms file received
 
+  // Playlist sync
+  playlistUpdate,
+
   // Session
   heartbeat,
   heartbeatAck,
@@ -217,6 +220,19 @@ class ProtocolMessage {
 
   factory ProtocolMessage.skipPrev() {
     return ProtocolMessage(type: MessageType.skipPrev);
+  }
+
+  factory ProtocolMessage.playlistUpdate({
+    required List<Map<String, dynamic>> tracks,
+    required int currentIndex,
+  }) {
+    return ProtocolMessage(
+      type: MessageType.playlistUpdate,
+      payload: {
+        'tracks': tracks,
+        'current_index': currentIndex,
+      },
+    );
   }
 
   factory ProtocolMessage.error({required String message}) {

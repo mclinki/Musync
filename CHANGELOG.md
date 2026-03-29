@@ -5,6 +5,46 @@
 
 ---
 
+## Session du 2026-03-29 (v0.1.5)
+
+### Contexte
+Audit fonction par fonction complet. 7 bugs supplémentaires trouvés et corrigés.
+
+### Modifications
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 1 | `FIX` | `_cachedFilePath` non réinitialisé entre sessions → ancien fichier d'une session précédente | `session_manager.dart` |
+| 2 | `FIX` | `_handlePrepareCommand()` : `cachePath` null → chemin `"null/filename"` | `session_manager.dart` |
+| 3 | `FIX` | `resumePlayback()` envoie chemin complet au lieu du nom de fichier → guest ne trouve pas le fichier | `session_manager.dart` |
+| 4 | `FIX` | `dispose()` WebSocketClient n'attendait pas `disconnect()` → fermeture incomplète | `websocket_client.dart` |
+| 5 | `FIX` | `_handleHostSyncRequest()` : t2 et t3 quasi identiques → précision NTP réduite | `websocket_client.dart` |
+| 6 | `FIX` | Guest skip mettait à jour sa playlist locale (différente de l'hôte) → mauvaise piste brièvement | `player_bloc.dart` |
+| 7 | `REFACTOR` | `_syncQualityController` déplacé dans la section champs | `session_manager.dart` |
+
+---
+
+## Session du 2026-03-28 (v0.1.4)
+
+### Contexte
+Corrections de 6 bugs critiques suite aux tests sur CLK NX1 et VOG-L29 (Android 14).
+
+### Modifications
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 1 | `FIX` | Compensation clock offset dans _handlePlayCommand (startAtMs → temps local guest) | `session_manager.dart` |
+| 2 | `FEAT` | Nouveau message `playlistUpdate` pour sync playlist hôte→invité | `protocol_message.dart`, `websocket_server.dart`, `websocket_client.dart` |
+| 3 | `FEAT` | Affichage playlist hôte dans UI invité (_PlaylistCard) | `discovery_screen.dart` |
+| 4 | `FIX` | PlayerBloc invitéécoute les commandes skip de l'hôte via clientEvents | `player_bloc.dart`, `session_manager.dart` |
+| 5 | `FEAT` | Bouton stop local dans UI invité | `discovery_screen.dart` |
+| 6 | `FIX` | Émission SyncQualityChanged après calibration clock | `session_manager.dart`, `discovery_bloc.dart` |
+| 7 | `FEAT` | Persistance paramètres avec SharedPreferences (thème, nom, volume) | `settings_screen.dart`, `pubspec.yaml` |
+| 8 | `FEAT` | broadcastPlaylistUpdate dans WebSocketServer | `websocket_server.dart` |
+| 9 | `FEAT` | Stream playlistUpdateStream et syncQualityStream dans SessionManager | `session_manager.dart` |
+
+---
+
 ## Session du 2026-03-28 (v0.1.3)
 
 ### Contexte

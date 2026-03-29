@@ -146,10 +146,10 @@ class WebSocketClient {
   }
 
   /// Dispose resources.
-  void dispose() {
+  Future<void> dispose() async {
     _userDisconnected = true;
-    disconnect();
-    _eventController.close();
+    await disconnect();
+    await _eventController.close();
     clockSync.dispose();
   }
 
@@ -315,6 +315,9 @@ class WebSocketClient {
         case MessageType.skipPrev:
           _handleSkipPrev(message);
           break;
+        case MessageType.playlistUpdate:
+          _handlePlaylistUpdate(message);
+          break;
         case MessageType.heartbeat:
           _handleHeartbeat();
           break;
@@ -363,11 +366,11 @@ class WebSocketClient {
 
   void _handleHostSyncRequest(ProtocolMessage message) {
     // Host is requesting a sync exchange from us
+    // t2 = time we received the request, t3 = time we send the response
     final t2 = DateTime.now().millisecondsSinceEpoch;
     final t1 = message.timestampMs;
-    final t3 = DateTime.now().millisecondsSinceEpoch;
-
-    final response = ProtocolMessage.syncResponse(t1: t1, t2: t2, t3: t3);
+    // Minimal work between t2 and t3 for accuracy
+    final response = ProtocolMessage.syncResponse(t1: t1, t2: t2, t3: t2);
     _socket?.add(response.encode());
   }
 
@@ -451,6 +454,20 @@ class WebSocketClient {
     ));
   }
 
+  void _handlePlaylistUpdate(ProtocolMessage message) {
+    final tracks = (message.payload['tracks'] as List<dynamic>)
+        .map((t) => Map<String, dynamic>.from(t as Map))
+        .toList();
+    final currentIndex = message.payload['current_index'] as int;
+    _logger.i('Received playlist update: ${tracks.length} tracks, index=$currentIndex');
+
+    _eventController.add(ClientEvent(
+      type: ClientEventType.playlistUpdateCommand,
+      playlistTracks: tracks,
+      playlistCurrentIndex: currentIndex,
+    ));
+  }
+
   void _handleHeartbeat() {
     final ack = ProtocolMessage.heartbeatAck();
     _socket?.add(ack.encode());
@@ -513,6 +530,7 @@ enum ClientEventType {
   seekCommand,
   skipNextCommand,
   skipPrevCommand,
+  playlistUpdateCommand,
   fileTransferMessage,
   error,
 }
@@ -527,6 +545,8 @@ class ClientEvent {
   final int? seekPositionMs;
   final int? positionMs;
   final ProtocolMessage? protocolMessage;
+  final List<Map<String, dynamic>>? playlistTracks;
+  final int? playlistCurrentIndex;
 
   const ClientEvent({
     required this.type,
@@ -538,5 +558,7 @@ class ClientEvent {
     this.seekPositionMs,
     this.positionMs,
     this.protocolMessage,
+    this.playlistTracks,
+    this.playlistCurrentIndex,
   });
 }

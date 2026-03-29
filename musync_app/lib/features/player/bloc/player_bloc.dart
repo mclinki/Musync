@@ -181,6 +181,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
   final Logger _logger;
   StreamSubscription? _stateSub;
   StreamSubscription? _positionSub;
+  StreamSubscription? _clientEventSub;
 
   PlayerBloc({required this.sessionManager, Logger? logger})
       : _logger = logger ?? Logger(),
@@ -214,6 +215,20 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     _positionSub =
         sessionManager.audioEngine.positionStream.listen((position) {
       add(PositionUpdated(position));
+    });
+
+    // Listen to host commands (for guest mode)
+    _clientEventSub = sessionManager.clientEvents?.listen((event) {
+      if (event.type == ClientEventType.skipNextCommand) {
+        _logger.i('Host triggered skip next');
+        add(const SkipNextRequested());
+      } else if (event.type == ClientEventType.skipPrevCommand) {
+        _logger.i('Host triggered skip prev');
+        add(const SkipPreviousRequested());
+      } else if (event.type == ClientEventType.playlistUpdateCommand) {
+        // Playlist update handled by DiscoveryBloc
+        _logger.d('Playlist update received');
+      }
     });
   }
 
@@ -292,7 +307,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     try {
       if (sessionManager.role == DeviceRole.host) {
         // Host: play locally and broadcast to slaves
-        await sessionManager.playTrack(track);
+        await sessionManager.playTrack(track, playlist: state.playlist);
       } else {
         // Solo play or slave: just play locally
         await sessionManager.audioEngine.play();
@@ -350,6 +365,14 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     }
 
     final nextTrack = nextPlaylist.currentTrack!;
+
+    // Guest mode: only set loading, wait for host's playCommand to update track
+    if (sessionManager.role == DeviceRole.slave) {
+      _logger.i('Guest skip next: waiting for host play command');
+      emit(state.copyWith(status: PlayerStatus.loading));
+      return;
+    }
+
     emit(state.copyWith(
       status: PlayerStatus.loading,
       playlist: nextPlaylist,
@@ -362,11 +385,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
       await Future.delayed(const Duration(milliseconds: 300));
       final duration = sessionManager.audioEngine.duration;
 
-      if (sessionManager.role == DeviceRole.host) {
-        await sessionManager.playTrack(nextTrack);
-      } else {
-        await sessionManager.audioEngine.play();
-      }
+      await sessionManager.playTrack(nextTrack, playlist: nextPlaylist);
 
       emit(state.copyWith(
         status: PlayerStatus.playing,
@@ -402,6 +421,14 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     }
 
     final prevTrack = prevPlaylist.currentTrack!;
+
+    // Guest mode: only set loading, wait for host's playCommand to update track
+    if (sessionManager.role == DeviceRole.slave) {
+      _logger.i('Guest skip prev: waiting for host play command');
+      emit(state.copyWith(status: PlayerStatus.loading));
+      return;
+    }
+
     emit(state.copyWith(
       status: PlayerStatus.loading,
       playlist: prevPlaylist,
@@ -414,11 +441,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
       await Future.delayed(const Duration(milliseconds: 300));
       final duration = sessionManager.audioEngine.duration;
 
-      if (sessionManager.role == DeviceRole.host) {
-        await sessionManager.playTrack(prevTrack);
-      } else {
-        await sessionManager.audioEngine.play();
-      }
+      await sessionManager.playTrack(prevTrack, playlist: prevPlaylist);
 
       emit(state.copyWith(
         status: PlayerStatus.playing,
@@ -508,6 +531,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
   Future<void> close() {
     _stateSub?.cancel();
     _positionSub?.cancel();
+    _clientEventSub?.cancel();
     return super.close();
   }
 }

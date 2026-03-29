@@ -40,6 +40,10 @@ class SessionManager {
       StreamController.broadcast();
   final StreamController<List<DeviceInfo>> _devicesController =
       StreamController.broadcast();
+  final StreamController<PlaylistUpdate> _playlistUpdateController =
+      StreamController.broadcast();
+  final StreamController<SyncQualityUpdate> _syncQualityController =
+      StreamController.broadcast();
 
   // Subscriptions
   final List<StreamSubscription> _subscriptions = [];
@@ -78,6 +82,17 @@ class SessionManager {
 
   /// Stream of discovered devices.
   Stream<List<DeviceInfo>> get devicesStream => _devicesController.stream;
+
+  /// Stream of client events (for slave-side UI to react to host commands).
+  Stream<ClientEvent>? get clientEvents => _client?.events;
+
+  /// Stream of playlist updates (for slave-side UI).
+  Stream<PlaylistUpdate> get playlistUpdateStream =>
+      _playlistUpdateController.stream;
+
+  /// Stream of sync quality updates (for slave-side UI).
+  Stream<SyncQualityUpdate> get syncQualityStream =>
+      _syncQualityController.stream;
 
   /// Discovered devices.
   Map<String, DeviceInfo> get discoveredDevices => _discovery.discoveredDevices;
@@ -181,6 +196,9 @@ class SessionManager {
 
     _logger.i('Joining session at $hostIp:$hostPort...');
 
+    // Reset cached file from previous session
+    _cachedFilePath = null;
+
     _client = WebSocketClient(
       hostIp: hostIp,
       hostPort: hostPort,
@@ -205,6 +223,9 @@ class SessionManager {
       _logger.w('Clock sync failed, continuing anyway');
     }
 
+    // Emit sync quality
+    _emitSyncQuality();
+
     _role = DeviceRole.slave;
     _emitState(SessionManagerState.joined);
 
@@ -216,7 +237,7 @@ class SessionManager {
   }
 
   /// Start playing a track (host only).
-  Future<void> playTrack(AudioTrack track, {int delayMs = 1000}) async {
+  Future<void> playTrack(AudioTrack track, {int delayMs = 1000, Playlist? playlist}) async {
     if (_role != DeviceRole.host) {
       throw Exception('Only the host can start playback');
     }
@@ -284,6 +305,19 @@ class SessionManager {
       startedAt: DateTime.now(),
     );
 
+    // Broadcast playlist update to slaves
+    if (_server!.slaveCount > 0 && playlist != null) {
+      await _server!.broadcastPlaylistUpdate(
+        tracks: playlist.tracks.map((t) => {
+          'title': t.title,
+          'artist': t.artist,
+          'source': t.source,
+          'sourceType': t.sourceType.name,
+        }).toList(),
+        currentIndex: playlist.currentIndex,
+      );
+    }
+
     _emitState(SessionManagerState.playing);
   }
 
@@ -313,8 +347,14 @@ class SessionManager {
 
     final positionMs = _audioEngine.position.inMilliseconds;
 
+    // Use filename for local files (guests have the file in cache by filename)
+    String trackSource = track.source;
+    if (track.sourceType == AudioSourceType.localFile) {
+      trackSource = track.source.split('/').last.split('\\').last;
+    }
+
     await _server!.broadcastPlay(
-      trackSource: track.source,
+      trackSource: trackSource,
       sourceType: track.sourceType,
       delayMs: delayMs,
       seekPositionMs: positionMs,
@@ -341,6 +381,9 @@ class SessionManager {
     }
 
     await _audioEngine.stop();
+
+    // Reset cached state
+    _cachedFilePath = null;
 
     // Stop foreground service
     await _foregroundService.stop();
@@ -376,6 +419,8 @@ class SessionManager {
     await _audioEngine.dispose();
     await _stateController.close();
     await _devicesController.close();
+    await _playlistUpdateController.close();
+    await _syncQualityController.close();
   }
 
   // ── Event Handlers ──
@@ -441,6 +486,9 @@ class SessionManager {
         _logger.i('Received skip prev from host');
         // Skip is handled at the player level, just log
         break;
+      case ClientEventType.playlistUpdateCommand:
+        _handlePlaylistUpdateCommand(event);
+        break;
       case ClientEventType.fileTransferMessage:
         _handleFileTransferMessage(event);
         break;
@@ -478,7 +526,12 @@ class SessionManager {
 
     // If it's a local file, check if we have it in cache
     if (event.sourceType == AudioSourceType.localFile) {
-      final cachedPath = '${_fileTransfer.cachePath}/$trackSource';
+      final cachePath = _fileTransfer.cachePath;
+      if (cachePath == null) {
+        _logger.w('No cache path available for prepare');
+        return;
+      }
+      final cachedPath = '$cachePath/$trackSource';
       final cachedFile = File(cachedPath);
 
       if (await cachedFile.exists()) {
@@ -586,9 +639,15 @@ class SessionManager {
     }
 
     // Play at scheduled time
-    final delayMs = event.startAtMs != null
-        ? event.startAtMs! - DateTime.now().millisecondsSinceEpoch
-        : 0;
+    // Convert host's startAtMs to local time using clock offset
+    int delayMs = 0;
+    if (event.startAtMs != null) {
+      final clockOffsetMs = _client?.clockSync.stats.offsetMs ?? 0;
+      final localStartAtMs = event.startAtMs! - clockOffsetMs.round();
+      delayMs = localStartAtMs - DateTime.now().millisecondsSinceEpoch;
+      _logger.d('Clock offset: ${clockOffsetMs.toStringAsFixed(1)}ms, '
+          'host startAt: ${event.startAtMs}, local startAt: $localStartAtMs, delay: ${delayMs}ms');
+    }
 
     if (delayMs > 0 && delayMs < 5000) {
       _logger.i('Waiting ${delayMs}ms before playing...');
@@ -651,8 +710,30 @@ class SessionManager {
     }
   }
 
+  void _handlePlaylistUpdateCommand(ClientEvent event) {
+    if (event.playlistTracks == null) return;
+    _logger.i('Received playlist update: ${event.playlistTracks!.length} tracks');
+    _playlistUpdateController.add(PlaylistUpdate(
+      tracks: event.playlistTracks!,
+      currentIndex: event.playlistCurrentIndex ?? 0,
+    ));
+  }
+
   void _emitState(SessionManagerState state) {
     _stateController.add(state);
+  }
+
+  void _emitSyncQuality() {
+    if (_client == null) return;
+    final stats = _client!.clockSync.stats;
+    _syncQualityController.add(SyncQualityUpdate(
+      offsetMs: stats.offsetMs,
+      jitterMs: stats.jitterMs,
+      isCalibrated: stats.isCalibrated,
+      qualityLabel: stats.qualityLabel,
+    ));
+    _logger.i('Sync quality emitted: offset=${stats.offsetMs.toStringAsFixed(1)}ms, '
+        'jitter=${stats.jitterMs.toStringAsFixed(1)}ms, quality=${stats.qualityLabel}');
   }
 }
 
@@ -665,4 +746,30 @@ enum SessionManagerState {
   playing,
   paused,
   error,
+}
+
+/// Playlist update received from the host.
+class PlaylistUpdate {
+  final List<Map<String, dynamic>> tracks;
+  final int currentIndex;
+
+  const PlaylistUpdate({
+    required this.tracks,
+    required this.currentIndex,
+  });
+}
+
+/// Sync quality update for the guest UI.
+class SyncQualityUpdate {
+  final double offsetMs;
+  final double jitterMs;
+  final bool isCalibrated;
+  final String qualityLabel;
+
+  const SyncQualityUpdate({
+    required this.offsetMs,
+    required this.jitterMs,
+    required this.isCalibrated,
+    required this.qualityLabel,
+  });
 }

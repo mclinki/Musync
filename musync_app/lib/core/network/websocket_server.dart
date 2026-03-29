@@ -163,6 +163,19 @@ class WebSocketServer {
     await broadcast(message);
   }
 
+  /// Broadcast a playlist update to all slaves.
+  Future<void> broadcastPlaylistUpdate({
+    required List<Map<String, dynamic>> tracks,
+    required int currentIndex,
+  }) async {
+    final message = ProtocolMessage.playlistUpdate(
+      tracks: tracks,
+      currentIndex: currentIndex,
+    );
+    _logger.i('Broadcasting playlist update: ${tracks.length} tracks, index=$currentIndex');
+    await broadcast(message);
+  }
+
   /// Send a message to a specific slave.
   Future<void> sendToSlave(String deviceId, ProtocolMessage message) async {
     final slave = _slaves[deviceId];

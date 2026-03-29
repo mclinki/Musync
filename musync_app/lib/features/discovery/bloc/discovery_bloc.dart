@@ -118,6 +118,16 @@ class FileTransferProgressChanged extends DiscoveryEvent {
   List<Object?> get props => [progress];
 }
 
+class PlaylistUpdated extends DiscoveryEvent {
+  final List<Map<String, dynamic>> tracks;
+  final int currentIndex;
+
+  const PlaylistUpdated({required this.tracks, required this.currentIndex});
+
+  @override
+  List<Object?> get props => [tracks, currentIndex];
+}
+
 // ── State ──
 
 class DiscoveryState extends Equatable {
@@ -141,6 +151,9 @@ class DiscoveryState extends Equatable {
   final double? fileTransferProgress;
   // Connection state detail
   final ConnectionDetail connectionDetail;
+  // Playlist from host (for slave view)
+  final List<Map<String, dynamic>> playlistTracks;
+  final int playlistCurrentIndex;
 
   const DiscoveryState({
     this.status = DiscoveryStatus.idle,
@@ -158,6 +171,8 @@ class DiscoveryState extends Equatable {
     this.syncOffsetMs = 0,
     this.fileTransferProgress,
     this.connectionDetail = ConnectionDetail.idle,
+    this.playlistTracks = const [],
+    this.playlistCurrentIndex = 0,
   });
 
   DiscoveryState copyWith({
@@ -178,6 +193,8 @@ class DiscoveryState extends Equatable {
     double? fileTransferProgress,
     bool clearFileTransferProgress = false,
     ConnectionDetail? connectionDetail,
+    List<Map<String, dynamic>>? playlistTracks,
+    int? playlistCurrentIndex,
   }) {
     return DiscoveryState(
       status: status ?? this.status,
@@ -197,6 +214,8 @@ class DiscoveryState extends Equatable {
           ? null
           : (fileTransferProgress ?? this.fileTransferProgress),
       connectionDetail: connectionDetail ?? this.connectionDetail,
+      playlistTracks: playlistTracks ?? this.playlistTracks,
+      playlistCurrentIndex: playlistCurrentIndex ?? this.playlistCurrentIndex,
     );
   }
 
@@ -217,6 +236,8 @@ class DiscoveryState extends Equatable {
         syncOffsetMs,
         fileTransferProgress,
         connectionDetail,
+        playlistTracks,
+        playlistCurrentIndex,
       ];
 }
 
@@ -305,6 +326,8 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
   StreamSubscription? _stateSub;
   StreamSubscription? _audioStateSub;
   StreamSubscription? _positionSub;
+  StreamSubscription? _playlistSub;
+  StreamSubscription? _syncQualitySub;
 
   DiscoveryBloc({required this.sessionManager, Logger? logger})
       : _logger = logger ?? Logger(),
@@ -322,6 +345,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
     on<PlaybackStateChanged>(_onPlaybackStateChanged);
     on<SyncQualityChanged>(_onSyncQualityChanged);
     on<FileTransferProgressChanged>(_onFileTransferProgressChanged);
+    on<PlaylistUpdated>(_onPlaylistUpdated);
 
     // Listen to session manager
     _devicesSub = sessionManager.devicesStream.listen((devices) {
@@ -346,6 +370,31 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
     // Listen to position updates
     _positionSub = sessionManager.audioEngine.positionStream.listen((position) {
       _handlePositionChange(position);
+    });
+
+    // Listen to playlist updates from host
+    _playlistSub = sessionManager.playlistUpdateStream.listen((update) {
+      add(PlaylistUpdated(
+        tracks: update.tracks,
+        currentIndex: update.currentIndex,
+      ));
+    });
+
+    // Listen to sync quality updates
+    _syncQualitySub = sessionManager.syncQualityStream.listen((update) {
+      SyncQuality quality;
+      if (!update.isCalibrated) {
+        quality = SyncQuality.unknown;
+      } else if (update.jitterMs < 5) {
+        quality = SyncQuality.excellent;
+      } else if (update.jitterMs < 15) {
+        quality = SyncQuality.good;
+      } else if (update.jitterMs < 30) {
+        quality = SyncQuality.acceptable;
+      } else {
+        quality = SyncQuality.degraded;
+      }
+      add(SyncQualityChanged(quality: quality, offsetMs: update.offsetMs));
     });
   }
 
@@ -570,12 +619,25 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
     ));
   }
 
+  void _onPlaylistUpdated(
+    PlaylistUpdated event,
+    Emitter<DiscoveryState> emit,
+  ) {
+    _logger.i('Playlist updated: ${event.tracks.length} tracks, index=${event.currentIndex}');
+    emit(state.copyWith(
+      playlistTracks: event.tracks,
+      playlistCurrentIndex: event.currentIndex,
+    ));
+  }
+
   @override
   Future<void> close() {
     _devicesSub?.cancel();
     _stateSub?.cancel();
     _audioStateSub?.cancel();
     _positionSub?.cancel();
+    _playlistSub?.cancel();
+    _syncQualitySub?.cancel();
     return super.close();
   }
 }

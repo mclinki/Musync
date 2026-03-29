@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/core.dart';
 
 /// Settings screen for app configuration.
@@ -28,9 +29,51 @@ class _SettingsViewState extends State<_SettingsView> {
   ThemeMode _themeMode = ThemeMode.system;
   double _defaultVolume = 1.0;
   String _deviceName = 'MusyncMIMO Device';
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _themeMode = ThemeMode.values.firstWhere(
+        (e) => e.name == prefs.getString('theme_mode'),
+        orElse: () => ThemeMode.system,
+      );
+      _defaultVolume = prefs.getDouble('default_volume') ?? 1.0;
+      _deviceName = prefs.getString('device_name') ?? 'MusyncMIMO Device';
+      _isLoading = false;
+    });
+  }
+
+  Future<void> _saveThemeMode(ThemeMode mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('theme_mode', mode.name);
+    setState(() => _themeMode = mode);
+  }
+
+  Future<void> _saveDefaultVolume(double volume) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('default_volume', volume);
+    setState(() => _defaultVolume = volume);
+  }
+
+  Future<void> _saveDeviceName(String name) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('device_name', name);
+    setState(() => _deviceName = name);
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
     return ListView(
       children: [
         // ── Apparence ──
@@ -68,7 +111,7 @@ class _SettingsViewState extends State<_SettingsView> {
             divisions: 10,
             label: '${(_defaultVolume * 100).round()}%',
             onChanged: (value) {
-              setState(() => _defaultVolume = value);
+              _saveDefaultVolume(value);
             },
           ),
         ),
@@ -159,7 +202,7 @@ class _SettingsViewState extends State<_SettingsView> {
     final isSelected = _themeMode == mode;
     return SimpleDialogOption(
       onPressed: () {
-        setState(() => _themeMode = mode);
+        _saveThemeMode(mode);
         Navigator.pop(context);
       },
       child: Row(
@@ -202,7 +245,7 @@ class _SettingsViewState extends State<_SettingsView> {
             onPressed: () {
               final name = controller.text.trim();
               if (name.isNotEmpty) {
-                setState(() => _deviceName = name);
+                _saveDeviceName(name);
               }
               Navigator.pop(context);
             },

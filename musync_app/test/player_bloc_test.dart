@@ -22,6 +22,7 @@ void main() {
 
   setUpAll(() {
     registerFallbackValue(FakeAudioTrack());
+    registerFallbackValue(Duration.zero);
   });
 
   setUp(() {
@@ -239,6 +240,9 @@ void main() {
       build: () {
         when(() => audioEngine.loadTrack(any())).thenAnswer((_) async {});
         when(() => audioEngine.play()).thenAnswer((_) async {});
+        when(() => sessionManager.role).thenReturn(DeviceRole.host);
+        when(() => sessionManager.playTrack(any(), delayMs: any(named: 'delayMs'), playlist: any(named: 'playlist')))
+            .thenAnswer((_) async {});
         return PlayerBloc(sessionManager: sessionManager);
       },
       seed: () => PlayerState(

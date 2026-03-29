@@ -39,6 +39,32 @@
   - `_buildJoiningView` ne montre pas à quel appareil on se connecte
   - Priorité : Basse
 
+- [ ] **SYNC 1** : Émettre SyncQualityChanged après chaque recalibration auto
+  - Actuellement émis une seule fois après join
+  - Le clock_sync a un timer auto-calibration mais pas de callback de fin
+  - Priorité : Moyenne
+
+- [ ] **SYNC 2** : Guest pause/resume ne propage pas à l'hôte
+  - Le guest peut mettre en pause localement mais l'hôte ne le sait pas
+  - Priorité : Basse (comportement actuel = volume local)
+
+---
+
+## ✅ Corrections bugs tests réels (v0.1.4 + v0.1.5)
+
+- [x] **BUG-TEST 1** : Clock offset non appliqué dans startAtMs (retard CLK NX1)
+- [x] **BUG-TEST 2** : Playlist invité invisible → nouveau protocole playlistUpdate
+- [x] **BUG-TEST 3** : Skip next hôte ne propage pas au guest
+- [x] **BUG-TEST 4** : Pas de bouton stop dans UI invité
+- [x] **BUG-TEST 5** : Indicateur décalage = 0 (SyncQualityChanged jamais émis)
+- [x] **BUG-TEST 6** : Paramètres non persistés (SharedPreferences)
+- [x] **BUG-AUDIT 1** : _cachedFilePath non réinitialisé entre sessions
+- [x] **BUG-AUDIT 2** : cachePath null dans _handlePrepareCommand
+- [x] **BUG-AUDIT 3** : resumePlayback envoie chemin complet au lieu du filename
+- [x] **BUG-AUDIT 4** : dispose() WebSocketClient sans await
+- [x] **BUG-AUDIT 5** : t2/t3 identiques dans _handleHostSyncRequest
+- [x] **BUG-AUDIT 6** : Guest skip affiche mauvaise piste brièvement
+
 ---
 
 ## ✅ Tâches P0 complétées (v0.1.3)
@@ -50,4 +76,4 @@
 
 ---
 
-*Dernière mise à jour : 28 Mars 2026*
+*Dernière mise à jour : 29 Mars 2026*
