@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:logger/logger.dart';
+import '../app_constants.dart';
 import '../models/models.dart';
 import 'clock_sync.dart';
 
@@ -32,13 +33,14 @@ class WebSocketClient {
   Timer? _reconnectTimer;
 
   // Reconnection config
-  static const int _maxReconnectAttempts = 10;
-  static const Duration _initialReconnectDelay = Duration(seconds: 1);
-  static const Duration _maxReconnectDelay = Duration(seconds: 30);
+  static const int _maxReconnectAttempts = AppConstants.maxReconnectAttempts;
+  static const Duration _initialReconnectDelay = Duration(milliseconds: AppConstants.initialReconnectDelayMs);
+  static const Duration _maxReconnectDelay = Duration(milliseconds: AppConstants.maxReconnectDelayMs);
   int _reconnectAttempts = 0;
 
   // Sync state
-  static const int _maxSyncAttempts = 3;
+  static const int _maxSyncAttempts = AppConstants.maxSyncAttempts;
+  StreamSubscription? _syncSub;
 
   WebSocketClient({
     required this.hostIp,
@@ -164,8 +166,8 @@ class WebSocketClient {
     try {
       _logger.i('Connecting to ws://$hostIp:$hostPort/musync...');
 
-      _socket = await WebSocket.connect('ws://$hostIp:$hostPort/musync')
-          .timeout(const Duration(seconds: 5));
+      _socket = await WebSocket.connect('ws://$hostIp:$hostPort${AppConstants.webSocketPath}')
+          .timeout(const Duration(milliseconds: AppConstants.connectionTimeoutMs));
 
       _isConnected = true;
       _isReconnecting = false;
@@ -254,18 +256,21 @@ class WebSocketClient {
     final request = ProtocolMessage.syncRequest();
     _socket!.add(request.encode());
 
+    // Cancel any previous sync subscription to avoid listener leaks
+    await _syncSub?.cancel();
+
     // Wait for sync_response
     final completer = Completer<ClockSample>();
-    late StreamSubscription sub;
 
-    sub = _socket!.listen((data) {
+    _syncSub = _socket!.listen((data) {
       try {
         final msg = ProtocolMessage.decode(data as String);
         if (msg.type == MessageType.syncResponse) {
           final t2 = msg.payload['t2'] as int;
           final t3 = msg.payload['t3'] as int;
           final t4 = DateTime.now().millisecondsSinceEpoch;
-          sub.cancel();
+          _syncSub?.cancel();
+          _syncSub = null;
           completer.complete(ClockSample(t1, t2, t3, t4));
         }
       } catch (_) {}
@@ -274,7 +279,8 @@ class WebSocketClient {
     return completer.future.timeout(
       const Duration(seconds: 2),
       onTimeout: () {
-        sub.cancel();
+        _syncSub?.cancel();
+        _syncSub = null;
         throw TimeoutException('Sync exchange timed out');
       },
     );
@@ -345,7 +351,7 @@ class WebSocketClient {
     // Start heartbeat
     _heartbeatTimer?.cancel();
     _heartbeatTimer = Timer.periodic(
-      const Duration(seconds: 2),
+      const Duration(milliseconds: AppConstants.clientHeartbeatIntervalMs),
       (_) => _sendHeartbeat(),
     );
 
@@ -369,8 +375,8 @@ class WebSocketClient {
     // t2 = time we received the request, t3 = time we send the response
     final t2 = DateTime.now().millisecondsSinceEpoch;
     final t1 = message.timestampMs;
-    // Minimal work between t2 and t3 for accuracy
-    final response = ProtocolMessage.syncResponse(t1: t1, t2: t2, t3: t2);
+    final t3 = DateTime.now().millisecondsSinceEpoch;
+    final response = ProtocolMessage.syncResponse(t1: t1, t2: t2, t3: t3);
     _socket?.add(response.encode());
   }
 

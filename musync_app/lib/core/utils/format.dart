@@ -1,7 +1,11 @@
-/// Format a duration as MM:SS.
+/// Format a duration as MM:SS or H:MM:SS if >= 1 hour.
 String formatDuration(Duration d) {
+  final hours = d.inHours;
   final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
   final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+  if (hours > 0) {
+    return '$hours:$minutes:$seconds';
+  }
   return '$minutes:$seconds';
 }
 

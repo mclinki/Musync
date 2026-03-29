@@ -1,13 +1,14 @@
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:logger/logger.dart';
+import '../app_constants.dart';
 
 /// Controls the Android foreground service to keep the app alive in background.
 ///
 /// On Android, this prevents the OS from killing the app during active sessions.
 /// On iOS, this is a no-op (iOS handles background audio via AudioSession).
 class ForegroundService {
-  static const _channel = MethodChannel('com.musync.mimo/foreground');
+  static const _channel = MethodChannel(AppConstants.foregroundServiceChannel);
   final Logger _logger;
   bool _isRunning = false;
 

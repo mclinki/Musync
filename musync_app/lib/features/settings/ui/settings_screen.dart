@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/core.dart';
+import '../bloc/settings_bloc.dart';
 
 /// Settings screen for app configuration.
 class SettingsScreen extends StatelessWidget {
@@ -9,170 +9,136 @@ class SettingsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return const _SettingsView();
+  }
+}
+
+class _SettingsView extends StatelessWidget {
+  const _SettingsView();
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Paramètres'),
       ),
-      body: const _SettingsView(),
-    );
-  }
-}
+      body: BlocBuilder<SettingsBloc, SettingsState>(
+        builder: (context, state) {
+          if (state.isLoading) {
+            return const Center(child: CircularProgressIndicator());
+          }
 
-class _SettingsView extends StatefulWidget {
-  const _SettingsView();
+          if (state.errorMessage != null) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(state.errorMessage!)),
+            );
+          }
 
-  @override
-  State<_SettingsView> createState() => _SettingsViewState();
-}
+          return ListView(
+            children: [
+              // ── Apparence ──
+              _SectionHeader(title: 'Apparence'),
+              ListTile(
+                leading: const Icon(Icons.palette),
+                title: const Text('Thème'),
+                subtitle: Text(_themeModeLabel(state.themeMode)),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _showThemeDialog(context, state.themeMode),
+              ),
 
-class _SettingsViewState extends State<_SettingsView> {
-  ThemeMode _themeMode = ThemeMode.system;
-  double _defaultVolume = 1.0;
-  String _deviceName = 'MusyncMIMO Device';
-  bool _isLoading = true;
+              const Divider(height: 1),
 
-  @override
-  void initState() {
-    super.initState();
-    _loadSettings();
-  }
+              // ── Appareil ──
+              _SectionHeader(title: 'Appareil'),
+              ListTile(
+                leading: const Icon(Icons.phone_android),
+                title: const Text('Nom de l\'appareil'),
+                subtitle: Text(state.deviceName),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _showDeviceNameDialog(context, state.deviceName),
+              ),
+              ListTile(
+                leading: const Icon(Icons.volume_up),
+                title: const Text('Volume par défaut'),
+                subtitle: Text('${(state.defaultVolume * 100).round()}%'),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Slider(
+                  value: state.defaultVolume,
+                  min: 0,
+                  max: 1,
+                  divisions: 10,
+                  label: '${(state.defaultVolume * 100).round()}%',
+                  onChanged: (value) {
+                    context
+                        .read<SettingsBloc>()
+                        .add(DefaultVolumeChanged(value));
+                  },
+                ),
+              ),
 
-  Future<void> _loadSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _themeMode = ThemeMode.values.firstWhere(
-        (e) => e.name == prefs.getString('theme_mode'),
-        orElse: () => ThemeMode.system,
-      );
-      _defaultVolume = prefs.getDouble('default_volume') ?? 1.0;
-      _deviceName = prefs.getString('device_name') ?? 'MusyncMIMO Device';
-      _isLoading = false;
-    });
-  }
+              const Divider(height: 1),
 
-  Future<void> _saveThemeMode(ThemeMode mode) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('theme_mode', mode.name);
-    setState(() => _themeMode = mode);
-  }
+              // ── Stockage ──
+              _SectionHeader(title: 'Stockage'),
+              ListTile(
+                leading: const Icon(Icons.delete_outline),
+                title: const Text('Vider le cache'),
+                subtitle: const Text(
+                    'Supprime les fichiers audio transférés'),
+                onTap: () => _confirmClearCache(context),
+              ),
 
-  Future<void> _saveDefaultVolume(double volume) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble('default_volume', volume);
-    setState(() => _defaultVolume = volume);
-  }
+              const Divider(height: 1),
 
-  Future<void> _saveDeviceName(String name) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('device_name', name);
-    setState(() => _deviceName = name);
-  }
+              // ── Réseau ──
+              _SectionHeader(title: 'Réseau'),
+              ListTile(
+                leading: const Icon(Icons.wifi),
+                title: const Text('Port du serveur'),
+                subtitle: Text('${AppConstants.defaultWebSocketPort}'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.security),
+                title: const Text('Chiffrement WebSocket'),
+                subtitle: const Text('Désactivé (ws://)'),
+                trailing: Switch(
+                  value: false,
+                  onChanged: null, // Disabled for now
+                ),
+              ),
 
-  @override
-  Widget build(BuildContext context) {
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
+              const Divider(height: 1),
 
-    return ListView(
-      children: [
-        // ── Apparence ──
-        _SectionHeader(title: 'Apparence'),
-        ListTile(
-          leading: const Icon(Icons.palette),
-          title: const Text('Thème'),
-          subtitle: Text(_themeModeLabel(_themeMode)),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => _showThemeDialog(),
-        ),
+              // ── À propos ──
+              _SectionHeader(title: 'À propos'),
+              ListTile(
+                leading: const Icon(Icons.info_outline),
+                title: const Text('Version'),
+                subtitle: Text(AppConstants.appVersion),
+              ),
+              ListTile(
+                leading: const Icon(Icons.code),
+                title: const Text('Source'),
+                subtitle: const Text('github.com/mclinki/Musync'),
+                trailing: const Icon(Icons.open_in_new, size: 18),
+              ),
+              ListTile(
+                leading: const Icon(Icons.bug_report_outlined),
+                title: const Text('Signaler un problème'),
+                trailing: const Icon(Icons.chevron_right),
+              ),
 
-        const Divider(height: 1),
-
-        // ── Appareil ──
-        _SectionHeader(title: 'Appareil'),
-        ListTile(
-          leading: const Icon(Icons.phone_android),
-          title: const Text('Nom de l\'appareil'),
-          subtitle: Text(_deviceName),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => _showDeviceNameDialog(),
-        ),
-        ListTile(
-          leading: const Icon(Icons.volume_up),
-          title: const Text('Volume par défaut'),
-          subtitle: Text('${(_defaultVolume * 100).round()}%'),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Slider(
-            value: _defaultVolume,
-            min: 0,
-            max: 1,
-            divisions: 10,
-            label: '${(_defaultVolume * 100).round()}%',
-            onChanged: (value) {
-              _saveDefaultVolume(value);
-            },
-          ),
-        ),
-
-        const Divider(height: 1),
-
-        // ── Stockage ──
-        _SectionHeader(title: 'Stockage'),
-        ListTile(
-          leading: const Icon(Icons.delete_outline),
-          title: const Text('Vider le cache'),
-          subtitle: const Text('Supprime les fichiers audio transférés'),
-          onTap: () => _confirmClearCache(),
-        ),
-
-        const Divider(height: 1),
-
-        // ── Réseau ──
-        _SectionHeader(title: 'Réseau'),
-        ListTile(
-          leading: const Icon(Icons.wifi),
-          title: const Text('Port du serveur'),
-          subtitle: const Text('7890'),
-        ),
-        ListTile(
-          leading: const Icon(Icons.security),
-          title: const Text('Chiffrement WebSocket'),
-          subtitle: const Text('Désactivé (ws://)'),
-          trailing: Switch(
-            value: false,
-            onChanged: null, // Disabled for now
-          ),
-        ),
-
-        const Divider(height: 1),
-
-        // ── À propos ──
-        _SectionHeader(title: 'À propos'),
-        ListTile(
-          leading: const Icon(Icons.info_outline),
-          title: const Text('Version'),
-          subtitle: const Text('0.1.3'),
-        ),
-        ListTile(
-          leading: const Icon(Icons.code),
-          title: const Text('Source'),
-          subtitle: const Text('github.com/mclinki/Musync'),
-          trailing: const Icon(Icons.open_in_new, size: 18),
-        ),
-        ListTile(
-          leading: const Icon(Icons.bug_report_outlined),
-          title: const Text('Signaler un problème'),
-          trailing: const Icon(Icons.chevron_right),
-        ),
-
-        const SizedBox(height: 32),
-      ],
+              const SizedBox(height: 32),
+            ],
+          );
+        },
+      ),
     );
   }
 
-  String _themeModeLabel(ThemeMode mode) {
+  static String _themeModeLabel(ThemeMode mode) {
     switch (mode) {
       case ThemeMode.system:
         return 'Système';
@@ -183,50 +149,59 @@ class _SettingsViewState extends State<_SettingsView> {
     }
   }
 
-  void _showThemeDialog() {
+  void _showThemeDialog(BuildContext context, ThemeMode currentMode) {
     showDialog(
       context: context,
-      builder: (context) => SimpleDialog(
+      builder: (dialogContext) => SimpleDialog(
         title: const Text('Thème'),
         children: [
-          _themeOption(context, ThemeMode.system, 'Système', Icons.settings),
-          _themeOption(context, ThemeMode.light, 'Clair', Icons.light_mode),
-          _themeOption(context, ThemeMode.dark, 'Sombre', Icons.dark_mode),
+          _themeOption(context, dialogContext, currentMode, ThemeMode.system,
+              'Système', Icons.settings),
+          _themeOption(context, dialogContext, currentMode, ThemeMode.light,
+              'Clair', Icons.light_mode),
+          _themeOption(context, dialogContext, currentMode, ThemeMode.dark,
+              'Sombre', Icons.dark_mode),
         ],
       ),
     );
   }
 
   Widget _themeOption(
-      BuildContext context, ThemeMode mode, String label, IconData icon) {
-    final isSelected = _themeMode == mode;
+    BuildContext blocContext,
+    BuildContext dialogContext,
+    ThemeMode currentMode,
+    ThemeMode mode,
+    String label,
+    IconData icon,
+  ) {
+    final isSelected = currentMode == mode;
     return SimpleDialogOption(
       onPressed: () {
-        _saveThemeMode(mode);
-        Navigator.pop(context);
+        blocContext.read<SettingsBloc>().add(ThemeChanged(mode));
+        Navigator.pop(dialogContext);
       },
       child: Row(
         children: [
           Icon(icon,
               color: isSelected
-                  ? Theme.of(context).colorScheme.primary
+                  ? Theme.of(blocContext).colorScheme.primary
                   : null),
           const SizedBox(width: 12),
           Text(label),
           const Spacer(),
           if (isSelected)
             Icon(Icons.check,
-                color: Theme.of(context).colorScheme.primary, size: 20),
+                color: Theme.of(blocContext).colorScheme.primary, size: 20),
         ],
       ),
     );
   }
 
-  void _showDeviceNameDialog() {
-    final controller = TextEditingController(text: _deviceName);
+  void _showDeviceNameDialog(BuildContext context, String currentName) {
+    final controller = TextEditingController(text: currentName);
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Nom de l\'appareil'),
         content: TextField(
           controller: controller,
@@ -238,16 +213,22 @@ class _SettingsViewState extends State<_SettingsView> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              controller.dispose();
+            },
             child: const Text('Annuler'),
           ),
           FilledButton(
             onPressed: () {
               final name = controller.text.trim();
               if (name.isNotEmpty) {
-                _saveDeviceName(name);
+                context
+                    .read<SettingsBloc>()
+                    .add(DeviceNameChanged(name));
               }
-              Navigator.pop(context);
+              Navigator.pop(dialogContext);
+              controller.dispose();
             },
             child: const Text('Enregistrer'),
           ),
@@ -256,23 +237,22 @@ class _SettingsViewState extends State<_SettingsView> {
     );
   }
 
-  void _confirmClearCache() {
+  void _confirmClearCache(BuildContext context) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Vider le cache'),
         content: const Text(
             'Cela supprimera tous les fichiers audio transférés. Continuer ?'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('Annuler'),
           ),
           FilledButton(
             onPressed: () {
-              final fileTransfer = context.read<SessionManager>().fileTransfer;
-              fileTransfer.cleanup();
-              Navigator.pop(context);
+              context.read<SettingsBloc>().add(const CacheCleared());
+              Navigator.pop(dialogContext);
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Cache vidé')),
               );

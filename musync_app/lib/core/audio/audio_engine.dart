@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:just_audio/just_audio.dart' as ja;
 import 'package:audio_session/audio_session.dart' as asession;
 import 'package:logger/logger.dart';
+import '../app_constants.dart';
 import '../models/models.dart';
 
 /// Audio playback state.
@@ -44,6 +45,7 @@ class AudioEngine {
   AudioEngineState get state => _state;
   Stream<AudioEngineState> get stateStream => _stateController.stream;
   Stream<Duration> get positionStream => _positionController.stream;
+  Stream<Duration?> get durationStream => _player.durationStream;
   Duration get position => _player.position;
   Duration? get duration => _player.duration;
   bool get isPlaying => _player.playing;
@@ -75,7 +77,7 @@ class AudioEngine {
       });
 
       _positionTimer = Timer.periodic(
-        const Duration(milliseconds: 200),
+        const Duration(milliseconds: AppConstants.positionUpdateIntervalMs),
         (_) {
           if (_player.playing) {
             _positionController.add(_player.position);

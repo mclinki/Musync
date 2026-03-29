@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 import 'package:uuid/uuid.dart';
+import '../app_constants.dart';
 
 /// Represents a device in the MusyncMIMO network.
 class DeviceInfo extends Equatable {
@@ -19,7 +20,7 @@ class DeviceInfo extends Equatable {
     required this.type,
     required this.ip,
     required this.port,
-    this.appVersion = '0.1.0',
+    this.appVersion = AppConstants.appVersion,
     this.role = DeviceRole.any,
     required this.discoveredAt,
     this.isReachable = true,
@@ -37,7 +38,7 @@ class DeviceInfo extends Equatable {
       type: DeviceType.fromString(txtRecords['device_type'] ?? 'phone'),
       ip: ip,
       port: port,
-      appVersion: txtRecords['app_version'] ?? '0.1.0',
+      appVersion: txtRecords['app_version'] ?? AppConstants.appVersion,
       role: DeviceRole.fromString(txtRecords['role'] ?? 'any'),
       discoveredAt: DateTime.now(),
     );
@@ -84,7 +85,7 @@ class DeviceInfo extends Equatable {
       type: DeviceType.fromString(json['type'] as String? ?? 'phone'),
       ip: json['ip'] as String,
       port: json['port'] as int,
-      appVersion: json['app_version'] as String? ?? '0.1.0',
+      appVersion: json['app_version'] as String? ?? AppConstants.appVersion,
       role: DeviceRole.fromString(json['role'] as String? ?? 'any'),
       discoveredAt: DateTime.now(),
     );

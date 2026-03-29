@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:math';
 import 'package:logger/logger.dart';
+import '../app_constants.dart';
 
 /// A single NTP-like clock synchronization sample.
 class ClockSample {
@@ -85,7 +86,7 @@ class ClockSyncEngine {
   ClockSyncEngine({
     this.onSyncRequest,
     Logger? logger,
-    int samplesPerCalibration = 8,
+    int samplesPerCalibration = AppConstants.samplesPerCalibration,
   })  : _logger = logger ?? Logger(),
         _samplesPerCalibration = samplesPerCalibration;
 
@@ -134,7 +135,7 @@ class ClockSyncEngine {
 
         // Reduced delay between samples for faster calibration
         if (i < _samplesPerCalibration - 1) {
-          await Future.delayed(const Duration(milliseconds: 50));
+          await Future.delayed(const Duration(milliseconds: AppConstants.calibrationSampleDelayMs));
         }
       } catch (e) {
         _logger.w('Sync request failed at sample $i: $e');
@@ -151,7 +152,7 @@ class ClockSyncEngine {
   }
 
   /// Start automatic periodic calibration.
-  void startAutoCalibration({Duration interval = const Duration(seconds: 10)}) {
+  void startAutoCalibration({Duration interval = const Duration(milliseconds: AppConstants.autoCalibrationIntervalMs)}) {
     stopAutoCalibration();
     _calibrationTimer = Timer.periodic(interval, (_) async {
       await calibrate();
@@ -172,18 +173,17 @@ class ClockSyncEngine {
     _offsetHistory.add(sample.offset);
 
     // Keep history bounded
-    while (_samples.length > 50) {
+    while (_samples.length > AppConstants.maxSampleHistory) {
       _samples.removeFirst();
     }
-    while (_offsetHistory.length > 50) {
+    while (_offsetHistory.length > AppConstants.maxSampleHistory) {
       _offsetHistory.removeFirst();
     }
   }
 
   /// Add a sample directly (for host-side processing).
   void addSample(ClockSample sample) {
-    _samples.add(sample);
-    _offsetHistory.add(sample.offset);
+    processSyncResponse(sample);
   }
 
   /// Dispose resources.

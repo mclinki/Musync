@@ -8,6 +8,7 @@ plugins {
     id "dev.flutter.flutter-gradle-plugin"
     // ── Firebase ──
     id "com.google.gms.google-services"
+    id "com.google.firebase.crashlytics"
 }
 
 def localProperties = new Properties()
@@ -55,6 +56,23 @@ android {
             signingConfig = signingConfigs.debug
         }
     }
+}
+
+dependencies {
+    // Import the Firebase BoM
+    implementation platform('com.google.firebase:firebase-bom:34.11.0')
+
+    // Firebase Analytics
+    implementation 'com.google.firebase:firebase-analytics'
+
+    // Firebase Crashlytics
+    implementation 'com.google.firebase:firebase-crashlytics'
+
+    // Firebase Auth
+    implementation 'com.google.firebase:firebase-auth'
+
+    // Cloud Firestore
+    implementation 'com.google.firebase:firebase-firestore'
 }
 
 flutter {

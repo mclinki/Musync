@@ -3,16 +3,18 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:logger/logger.dart';
 import 'package:multicast_dns/multicast_dns.dart';
+import '../app_constants.dart';
 import '../models/models.dart';
 
 /// Service type for mDNS discovery.
-const String kMdnsServiceType = '_musync._tcp';
-const int kDefaultPort = 7890;
+const String kMdnsServiceType = AppConstants.mdnsServiceType;
+const int kDefaultPort = AppConstants.defaultWebSocketPort;
+const String kAppVersion = AppConstants.appVersion;
 
 /// mDNS multicast address and port.
 final InternetAddress kMdnsMulticastAddress =
-    InternetAddress('224.0.0.251');
-const int kMdnsPort = 5353;
+    InternetAddress(AppConstants.mdnsMulticastAddress);
+const int kMdnsPort = AppConstants.mdnsPort;
 
 /// Discovers MusyncMIMO devices on the local network.
 ///
@@ -41,9 +43,10 @@ class DeviceDiscovery {
 
   bool _isPublishing = false;
   bool _isScanning = false;
+  Uint8List? _localIpBytes;
 
   // Device TTL
-  static const Duration _deviceTtl = Duration(seconds: 60);
+  static const Duration _deviceTtl = Duration(seconds: AppConstants.deviceTtlSeconds);
 
   DeviceDiscovery({
     required this.deviceId,
@@ -201,6 +204,14 @@ class DeviceDiscovery {
   /// Start a UDP multicast socket that responds to mDNS queries for our service.
   Future<void> _startMdnsPublisher({int port = kDefaultPort}) async {
     try {
+      // Resolve local IP for the A record before publishing
+      final localIp = await getLocalIp();
+      if (localIp != null) {
+        _localIpBytes = Uint8List.fromList(
+          localIp.split('.').map(int.parse).toList(),
+        );
+      }
+
       _mdnsPublishSocket = await RawDatagramSocket.bind(
         InternetAddress.anyIPv4,
         kMdnsPort,
@@ -335,7 +346,7 @@ class DeviceDiscovery {
       'device_id=$deviceId',
       'device_name=$deviceName',
       'device_type=$deviceType',
-      'app_version=0.1.2',
+      'app_version=$kAppVersion',
     ];
     for (final record in txtRecords) {
       final recordBytes = Uint8List.fromList(record.codeUnits);
@@ -355,8 +366,8 @@ class DeviceDiscovery {
     _writeUint16(aBuilder, 0x8001); // CLASS: IN, cache-flush
     _writeUint32(aBuilder, 120); // TTL
     _writeUint16(aBuilder, 4); // RDLENGTH
-    // Write IP address bytes (placeholder, will be filled by receiver)
-    aBuilder.add([0, 0, 0, 0]); // Will be replaced below
+    // Write IP address bytes (resolved from getLocalIp at publish time)
+    aBuilder.add(_localIpBytes ?? [0, 0, 0, 0]);
     builder.add(aBuilder.toBytes());
 
     return builder.toBytes();
@@ -588,7 +599,7 @@ class DeviceDiscovery {
 
     _logger.d('TCP scanning subnet $subnet.1-254:${port + 1}...');
 
-    const batchSize = 20;
+    const batchSize = AppConstants.tcpScanBatchSize;
     for (int batch = 0; batch < 254; batch += batchSize) {
       final futures = <Future<void>>[];
 
@@ -620,7 +631,7 @@ class DeviceDiscovery {
     Socket? socket;
     try {
       socket = await Socket.connect(ip, discoveryPort)
-          .timeout(const Duration(milliseconds: 800));
+          .timeout(const Duration(milliseconds: AppConstants.probeTimeoutMs));
 
       socket.write('MUSYNC_PROBE');
       await socket.flush();

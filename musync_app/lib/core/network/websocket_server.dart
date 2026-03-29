@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
 import 'package:logger/logger.dart';
+import '../app_constants.dart';
 import '../models/models.dart';
 import 'clock_sync.dart';
 
@@ -44,8 +45,8 @@ class WebSocketServer {
 
   // Heartbeat monitoring
   Timer? _heartbeatTimer;
-  static const int _heartbeatIntervalSeconds = 5;
-  static const int _heartbeatTimeoutSeconds = 15;
+  static const int _heartbeatIntervalSeconds = AppConstants.serverHeartbeatIntervalMs ~/ 1000;
+  static const int _heartbeatTimeoutSeconds = AppConstants.serverHeartbeatTimeoutMs ~/ 1000;
 
   // Clock sync for host
   final ClockSyncEngine clockSync = ClockSyncEngine();
@@ -119,7 +120,7 @@ class WebSocketServer {
   Future<void> broadcastPlay({
     required String trackSource,
     required AudioSourceType sourceType,
-    int delayMs = 1000,
+    int delayMs = AppConstants.defaultPlayDelayMs,
     int seekPositionMs = 0,
   }) async {
     final startAtMs = clockSync.syncedTimeMs + delayMs;
@@ -193,7 +194,7 @@ class WebSocketServer {
   // ── Internal ──
 
   void _handleRequest(HttpRequest request) async {
-    if (request.uri.path != '/musync') {
+    if (request.uri.path != AppConstants.webSocketPath) {
       request.response.statusCode = 404;
       await request.response.close();
       return;
@@ -245,24 +246,14 @@ class WebSocketServer {
     final deviceJson = message.payload['device'] as Map<String, dynamic>;
     final device = DeviceInfo.fromJson(deviceJson);
 
-    if (_slaves.containsKey(device.id)) {
-      // Reconnection
-      _logger.i('Device reconnecting: ${device.name} (${device.id})');
-      _slaves[device.id] = ConnectedSlave(
-        deviceId: device.id,
-        deviceName: device.name,
-        socket: socket,
-        connectedAt: DateTime.now(),
-      );
-    } else {
-      _logger.i('Device joining: ${device.name} (${device.id})');
-      _slaves[device.id] = ConnectedSlave(
-        deviceId: device.id,
-        deviceName: device.name,
-        socket: socket,
-        connectedAt: DateTime.now(),
-      );
-    }
+    final isReconnection = _slaves.containsKey(device.id);
+    _logger.i('Device ${isReconnection ? "reconnecting" : "joining"}: ${device.name} (${device.id})');
+    _slaves[device.id] = ConnectedSlave(
+      deviceId: device.id,
+      deviceName: device.name,
+      socket: socket,
+      connectedAt: DateTime.now(),
+    );
 
     // Send welcome
     final welcome = ProtocolMessage.welcome(

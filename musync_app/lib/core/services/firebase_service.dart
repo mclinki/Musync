@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:logger/logger.dart';
+import '../app_constants.dart';
 
 /// Centralized Firebase service for MusyncMIMO.
 ///
@@ -248,9 +249,9 @@ class FirebaseService {
     if (!_initialized || userId == null) return;
     try {
       await _firestore!
-          .collection('users')
+          .collection(AppConstants.firestoreCollectionUsers)
           .doc(userId)
-          .collection('groups')
+          .collection(AppConstants.firestoreCollectionGroups)
           .doc(groupId)
           .set({
         'name': groupName,
@@ -270,9 +271,9 @@ class FirebaseService {
     if (!_initialized || userId == null) return [];
     try {
       final snapshot = await _firestore!
-          .collection('users')
+          .collection(AppConstants.firestoreCollectionUsers)
           .doc(userId)
-          .collection('groups')
+          .collection(AppConstants.firestoreCollectionGroups)
           .orderBy('created_at', descending: true)
           .get();
 
@@ -292,9 +293,9 @@ class FirebaseService {
     if (!_initialized || userId == null) return;
     try {
       await _firestore!
-          .collection('users')
+          .collection(AppConstants.firestoreCollectionUsers)
           .doc(userId)
-          .collection('groups')
+          .collection(AppConstants.firestoreCollectionGroups)
           .doc(groupId)
           .delete();
       _logger.i('Group deleted: $groupId');
@@ -310,7 +311,7 @@ class FirebaseService {
     if (!_initialized || userId == null) return;
     try {
       await _firestore!
-          .collection('users')
+          .collection(AppConstants.firestoreCollectionUsers)
           .doc(userId)
           .set({
         'preferences': prefs,
@@ -326,7 +327,7 @@ class FirebaseService {
     if (!_initialized || userId == null) return {};
     try {
       final doc = await _firestore!
-          .collection('users')
+          .collection(AppConstants.firestoreCollectionUsers)
           .doc(userId)
           .get();
 

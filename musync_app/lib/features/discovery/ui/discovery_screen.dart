@@ -39,7 +39,10 @@ class _DiscoveryView extends StatelessWidget {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              controller.dispose();
+            },
             child: const Text('Annuler'),
           ),
           FilledButton(
@@ -47,6 +50,7 @@ class _DiscoveryView extends StatelessWidget {
               final ip = controller.text.trim();
               if (ip.isNotEmpty) {
                 Navigator.pop(dialogContext);
+                controller.dispose();
                 final device = DeviceInfo(
                   id: ip,
                   name: 'Appareil ($ip)',
@@ -519,55 +523,6 @@ class _DeviceTile extends StatelessWidget {
         child: const Text('Rejoindre'),
       ),
       onTap: onTap,
-    );
-  }
-}
-
-/// Volume slider with local state.
-class _VolumeSlider extends StatefulWidget {
-  final ValueChanged<double> onChanged;
-
-  const _VolumeSlider({required this.onChanged});
-
-  @override
-  State<_VolumeSlider> createState() => _VolumeSliderState();
-}
-
-class _VolumeSliderState extends State<_VolumeSlider> {
-  double _volume = 1.0;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(
-          _volume == 0
-              ? Icons.volume_off
-              : _volume < 0.5
-                  ? Icons.volume_down
-                  : Icons.volume_up,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
-        Expanded(
-          child: Slider(
-            value: _volume,
-            min: 0,
-            max: 1,
-            onChanged: (value) {
-              setState(() => _volume = value);
-              widget.onChanged(value);
-            },
-          ),
-        ),
-        SizedBox(
-          width: 40,
-          child: Text(
-            '${(_volume * 100).round()}%',
-            style: Theme.of(context).textTheme.bodySmall,
-            textAlign: TextAlign.end,
-          ),
-        ),
-      ],
     );
   }
 }

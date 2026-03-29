@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:firebase_analytics/firebase_analytics.dart';
 import 'core/core.dart';
 import 'core/services/permission_service.dart';
 import 'features/discovery/ui/discovery_screen.dart';
 import 'features/player/ui/player_screen.dart';
+import 'features/settings/bloc/settings_bloc.dart';
 import 'features/settings/ui/settings_screen.dart';
 
 void main() async {
@@ -26,6 +28,11 @@ void main() async {
   // 3. Create session manager
   final sessionManager = SessionManager();
 
+  // Wire Firebase analytics to SessionManager (optional)
+  if (firebase.isInitialized) {
+    sessionManager.setFirebaseService(firebase);
+  }
+
   // 4. Generate device ID
   final deviceId = const Uuid().v4();
 
@@ -42,21 +49,27 @@ void main() async {
     await firebase.setCustomKey('platform', 'flutter');
   }
 
-  // 6. Run app
+  // 6. Get SharedPreferences
+  final prefs = await SharedPreferences.getInstance();
+
+  // 7. Run app
   runApp(MusyncApp(
     sessionManager: sessionManager,
     firebaseService: firebase,
+    prefs: prefs,
   ));
 }
 
 class MusyncApp extends StatelessWidget {
   final SessionManager sessionManager;
   final FirebaseService firebaseService;
+  final SharedPreferences prefs;
 
   const MusyncApp({
     super.key,
     required this.sessionManager,
     required this.firebaseService,
+    required this.prefs,
   });
 
   @override
@@ -66,38 +79,48 @@ class MusyncApp extends StatelessWidget {
         RepositoryProvider<SessionManager>.value(value: sessionManager),
         RepositoryProvider<FirebaseService>.value(value: firebaseService),
       ],
-      child: MaterialApp(
-        title: 'MusyncMIMO',
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF6750A4),
-            brightness: Brightness.light,
-          ),
-          useMaterial3: true,
+      child: BlocProvider(
+        create: (_) => SettingsBloc(
+          prefs: prefs,
+          sessionManager: sessionManager,
+        )..add(const LoadSettings()),
+        child: BlocBuilder<SettingsBloc, SettingsState>(
+          builder: (context, settingsState) {
+            return MaterialApp(
+              title: 'MusyncMIMO',
+              debugShowCheckedModeBanner: false,
+              theme: ThemeData(
+                colorScheme: ColorScheme.fromSeed(
+                  seedColor: const Color(0xFF6750A4),
+                  brightness: Brightness.light,
+                ),
+                useMaterial3: true,
+              ),
+              darkTheme: ThemeData(
+                colorScheme: ColorScheme.fromSeed(
+                  seedColor: const Color(0xFF6750A4),
+                  brightness: Brightness.dark,
+                ),
+                useMaterial3: true,
+              ),
+              themeMode: settingsState.themeMode,
+              initialRoute: '/',
+              routes: {
+                '/': (context) => const HomeScreen(),
+                '/discovery': (context) => const DiscoveryScreen(),
+                '/player': (context) => const PlayerScreen(),
+                '/settings': (context) => const SettingsScreen(),
+              },
+              // Firebase Analytics observer
+              navigatorObservers: <NavigatorObserver>[
+                if (firebaseService.isInitialized && firebaseService.analytics != null)
+                  FirebaseAnalyticsObserver(
+                    analytics: firebaseService.analytics!,
+                  ),
+              ],
+            );
+          },
         ),
-        darkTheme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF6750A4),
-            brightness: Brightness.dark,
-          ),
-          useMaterial3: true,
-        ),
-        themeMode: ThemeMode.system,
-        initialRoute: '/',
-        routes: {
-          '/': (context) => const HomeScreen(),
-          '/discovery': (context) => const DiscoveryScreen(),
-          '/player': (context) => const PlayerScreen(),
-          '/settings': (context) => const SettingsScreen(),
-        },
-        // Firebase Analytics observer
-        navigatorObservers: <NavigatorObserver>[
-          if (firebaseService.isInitialized && firebaseService.analytics != null)
-            FirebaseAnalyticsObserver(
-              analytics: firebaseService.analytics!,
-            ),
-        ],
       ),
     );
   }

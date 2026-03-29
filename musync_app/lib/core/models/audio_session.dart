@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 import 'package:uuid/uuid.dart';
+import '../app_constants.dart';
 import 'device_info.dart';
 
 /// Represents a multi-device audio session.
@@ -52,7 +53,7 @@ class AudioSession extends Equatable {
 
   int get totalDevices => 1 + slaves.length;
 
-  bool get isFull => slaves.length >= 8;
+  bool get isFull => slaves.length >= AppConstants.maxSlaves;
 
   bool hasDevice(String deviceId) {
     return hostDevice.id == deviceId ||
@@ -76,6 +77,8 @@ class AudioSession extends Equatable {
         'slaves': slaves.map((d) => d.toJson()).toList(),
         'state': state.name,
         'track': currentTrack?.toJson(),
+        'created_at': createdAt.toIso8601String(),
+        'started_at': startedAt?.toIso8601String(),
       };
 
   @override
@@ -167,6 +170,7 @@ class AudioTrack extends Equatable {
         'source': source,
         'source_type': sourceType.name,
         'duration_ms': durationMs,
+        'file_size_bytes': fileSizeBytes,
       };
 
   factory AudioTrack.fromJson(Map<String, dynamic> json) {
@@ -181,6 +185,7 @@ class AudioTrack extends Equatable {
         orElse: () => AudioSourceType.localFile,
       ),
       durationMs: json['duration_ms'] as int?,
+      fileSizeBytes: json['file_size_bytes'] as int?,
     );
   }
 

@@ -4,8 +4,10 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:logger/logger.dart';
 import 'package:path_provider/path_provider.dart';
+import '../app_constants.dart';
 import '../models/protocol_message.dart';
 import '../network/websocket_server.dart';
+import '../utils/format.dart';
 
 /// Handles file transfer between host and slaves.
 ///
@@ -56,7 +58,7 @@ class FileTransferService {
   Future<bool> sendFile({
     required String filePath,
     required WebSocketServer server,
-    Duration timeout = const Duration(seconds: 30),
+    Duration timeout = const Duration(seconds: AppConstants.fileTransferTimeoutSeconds),
   }) async {
     final file = File(filePath);
     if (!await file.exists()) {
@@ -66,14 +68,14 @@ class FileTransferService {
 
     final fileName = filePath.split('/').last.split('\\').last;
     final fileSize = await file.length();
-    const chunkSize = 64 * 1024; // 64KB chunks
+    const chunkSize = AppConstants.fileChunkSizeBytes;
     final totalChunks = (fileSize / chunkSize).ceil();
 
     _logger.i('=== STARTING FILE TRANSFER ===');
     _logger.i('fileName: $fileName');
-    _logger.i('fileSize: ${_formatBytes(fileSize)}');
+    _logger.i('fileSize: ${formatBytes(fileSize)}');
     _logger.i('totalChunks: $totalChunks');
-    _logger.i('chunkSize: ${_formatBytes(chunkSize)}');
+    _logger.i('chunkSize: ${formatBytes(chunkSize)}');
 
     // Notify slaves about incoming file
     final startMsg = ProtocolMessage.fileTransferStart(
@@ -104,7 +106,7 @@ class FileTransferService {
       server.broadcast(chunkMsg);
 
       offset = end;
-      _logger.d('Sent chunk $i/$totalChunks (${_formatBytes(offset)}/${_formatBytes(fileSize)})');
+      _logger.d('Sent chunk $i/$totalChunks (${formatBytes(offset)}/${formatBytes(fileSize)})');
       
       // Report progress
       _progressController.add(TransferProgress(
@@ -115,8 +117,8 @@ class FileTransferService {
       ));
 
       // Small delay to avoid flooding - but make it faster
-      if (i % 5 == 0) {
-        await Future.delayed(const Duration(milliseconds: 5));
+      if (i % AppConstants.interChunkDelayInterval == 0) {
+        await Future.delayed(const Duration(milliseconds: AppConstants.interChunkDelayMs));
       }
     }
 
@@ -224,7 +226,7 @@ class FileTransferService {
     // Verify file was written
     if (await file.exists()) {
       final savedSize = await file.length();
-      _logger.i('File received and saved: $filePath (${_formatBytes(savedSize)}, expected ${_formatBytes(transfer.fileSize)})');
+      _logger.i('File received and saved: $filePath (${formatBytes(savedSize)}, expected ${formatBytes(transfer.fileSize)})');
     } else {
       _logger.e('ERROR: File was not written to disk!');
     }
@@ -247,12 +249,6 @@ class FileTransferService {
   /// Dispose resources.
   void dispose() {
     _progressController.close();
-  }
-
-  String _formatBytes(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 }
 

@@ -3,6 +3,7 @@ import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:logger/logger.dart';
 import '../../../core/core.dart';
+import '../../../core/services/firebase_service.dart';
 
 // ── Events ──
 
@@ -240,9 +241,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     try {
       await sessionManager.audioEngine.loadTrack(event.track);
 
-      // Wait a bit for duration to be available
-      await Future.delayed(const Duration(milliseconds: 500));
-      final duration = sessionManager.audioEngine.duration;
+      final duration = await _waitForDuration();
 
       // Create a new playlist with this track as the only item
       final playlist = Playlist(tracks: [event.track], currentIndex: 0);
@@ -326,32 +325,59 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     PauseRequested event,
     Emitter<PlayerState> emit,
   ) async {
-    if (sessionManager.role == DeviceRole.host) {
-      await sessionManager.pausePlayback();
-    } else {
-      await sessionManager.audioEngine.pause();
+    try {
+      if (sessionManager.role == DeviceRole.host) {
+        await sessionManager.pausePlayback();
+      } else {
+        await sessionManager.audioEngine.pause();
+      }
+      emit(state.copyWith(status: PlayerStatus.paused));
+    } catch (e, stack) {
+      _logger.e('Pause failed: $e');
+      FirebaseService().recordError(e, stack, reason: 'pause');
+      emit(state.copyWith(
+        status: PlayerStatus.error,
+        errorMessage: 'Erreur lors de la pause: $e',
+      ));
     }
-    emit(state.copyWith(status: PlayerStatus.paused));
   }
 
   Future<void> _onResume(
     ResumeRequested event,
     Emitter<PlayerState> emit,
   ) async {
-    if (sessionManager.role == DeviceRole.host) {
-      await sessionManager.resumePlayback();
-    } else {
-      await sessionManager.audioEngine.play();
+    try {
+      if (sessionManager.role == DeviceRole.host) {
+        await sessionManager.resumePlayback();
+      } else {
+        await sessionManager.audioEngine.play();
+      }
+      emit(state.copyWith(status: PlayerStatus.playing));
+    } catch (e, stack) {
+      _logger.e('Resume failed: $e');
+      FirebaseService().recordError(e, stack, reason: 'resume');
+      emit(state.copyWith(
+        status: PlayerStatus.error,
+        errorMessage: 'Erreur lors de la reprise: $e',
+      ));
     }
-    emit(state.copyWith(status: PlayerStatus.playing));
   }
 
   Future<void> _onStop(
     StopRequested event,
     Emitter<PlayerState> emit,
   ) async {
-    await sessionManager.audioEngine.stop();
-    emit(state.copyWith(status: PlayerStatus.idle, position: Duration.zero));
+    try {
+      await sessionManager.audioEngine.stop();
+      emit(state.copyWith(status: PlayerStatus.idle, position: Duration.zero));
+    } catch (e, stack) {
+      _logger.e('Stop failed: $e');
+      FirebaseService().recordError(e, stack, reason: 'stop');
+      emit(state.copyWith(
+        status: PlayerStatus.error,
+        errorMessage: 'Erreur lors de l\'arrêt: $e',
+      ));
+    }
   }
 
   Future<void> _onSkipNext(
@@ -382,8 +408,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
 
     try {
       await sessionManager.audioEngine.loadTrack(nextTrack);
-      await Future.delayed(const Duration(milliseconds: 300));
-      final duration = sessionManager.audioEngine.duration;
+      final duration = await _waitForDuration();
 
       await sessionManager.playTrack(nextTrack, playlist: nextPlaylist);
 
@@ -405,8 +430,8 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     SkipPreviousRequested event,
     Emitter<PlayerState> emit,
   ) async {
-    // If more than 3 seconds into the track, restart it instead of going to previous
-    if (state.position.inSeconds > 3) {
+    // If more than skipPreviousRestartThresholdSeconds into the track, restart it instead of going to previous
+    if (state.position.inSeconds > AppConstants.skipPreviousRestartThresholdSeconds) {
       await sessionManager.audioEngine.seek(Duration.zero);
       emit(state.copyWith(position: Duration.zero));
       return;
@@ -438,8 +463,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
 
     try {
       await sessionManager.audioEngine.loadTrack(prevTrack);
-      await Future.delayed(const Duration(milliseconds: 300));
-      final duration = sessionManager.audioEngine.duration;
+      final duration = await _waitForDuration();
 
       await sessionManager.playTrack(prevTrack, playlist: prevPlaylist);
 
@@ -461,16 +485,32 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     SeekRequested event,
     Emitter<PlayerState> emit,
   ) async {
-    await sessionManager.audioEngine.seek(event.position);
-    emit(state.copyWith(position: event.position));
+    try {
+      await sessionManager.audioEngine.seek(event.position);
+      emit(state.copyWith(position: event.position));
+    } catch (e, stack) {
+      _logger.e('Seek failed: $e');
+      FirebaseService().recordError(e, stack, reason: 'seek');
+      emit(state.copyWith(
+        errorMessage: 'Erreur lors du déplacement: $e',
+      ));
+    }
   }
 
   Future<void> _onVolumeChanged(
     VolumeChanged event,
     Emitter<PlayerState> emit,
   ) async {
-    await sessionManager.audioEngine.setVolume(event.volume);
-    emit(state.copyWith(volume: event.volume));
+    try {
+      await sessionManager.audioEngine.setVolume(event.volume);
+      emit(state.copyWith(volume: event.volume));
+    } catch (e, stack) {
+      _logger.e('Set volume failed: $e');
+      FirebaseService().recordError(e, stack, reason: 'volumeChanged');
+      emit(state.copyWith(
+        errorMessage: 'Erreur lors du changement de volume: $e',
+      ));
+    }
   }
 
   void _onPositionUpdated(
@@ -524,6 +564,28 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     } else {
       _logger.i('No more tracks in queue, stopping');
       emit(state.copyWith(status: PlayerStatus.idle, position: Duration.zero));
+    }
+  }
+
+  /// Waits for the audio engine's duration to become available after loading.
+  /// Listens on the durationStream instead of using an arbitrary delay.
+  /// Falls back to reading duration directly after timeout.
+  Future<Duration?> _waitForDuration({
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    final engine = sessionManager.audioEngine;
+
+    // If duration is already available, return immediately
+    if (engine.duration != null) return engine.duration;
+
+    // Otherwise wait for the stream to emit a non-null duration
+    try {
+      return await engine.durationStream
+          .firstWhere((d) => d != null && d > Duration.zero)
+          .timeout(timeout);
+    } on TimeoutException {
+      _logger.w('Timed out waiting for duration, using fallback');
+      return engine.duration;
     }
   }
 

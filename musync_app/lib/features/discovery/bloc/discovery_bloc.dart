@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:logger/logger.dart';
 import '../../../core/core.dart';
+import '../../../core/services/firebase_service.dart';
 
 // ── Events ──
 
@@ -424,14 +425,33 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
     Emitter<DiscoveryState> emit,
   ) async {
     emit(state.copyWith(status: DiscoveryStatus.scanning, errorMessage: null));
-    await sessionManager.startScanning();
+    try {
+      await sessionManager.startScanning();
+    } catch (e, stack) {
+      _logger.e('Failed to start scanning: $e');
+      FirebaseService().recordError(e, stack, reason: 'startScanning');
+      emit(state.copyWith(
+        status: DiscoveryStatus.error,
+        errorMessage: 'Failed to start scanning: $e',
+      ));
+    }
   }
 
   Future<void> _onStopScanning(
     StopScanning event,
     Emitter<DiscoveryState> emit,
   ) async {
-    await sessionManager.stopScanning();
+    try {
+      await sessionManager.stopScanning();
+    } catch (e, stack) {
+      _logger.e('Failed to stop scanning: $e');
+      FirebaseService().recordError(e, stack, reason: 'stopScanning');
+      emit(state.copyWith(
+        status: DiscoveryStatus.error,
+        errorMessage: 'Failed to stop scanning: $e',
+      ));
+      return;
+    }
     emit(state.copyWith(status: DiscoveryStatus.idle));
   }
 
@@ -536,7 +556,17 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
     LeaveSessionRequested event,
     Emitter<DiscoveryState> emit,
   ) async {
-    await sessionManager.leaveSession();
+    try {
+      await sessionManager.leaveSession();
+    } catch (e, stack) {
+      _logger.e('Failed to leave session: $e');
+      FirebaseService().recordError(e, stack, reason: 'leaveSession');
+      emit(state.copyWith(
+        status: DiscoveryStatus.error,
+        errorMessage: 'Failed to leave session: $e',
+      ));
+      return;
+    }
     emit(const DiscoveryState());
   }
 

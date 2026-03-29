@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:logger/logger.dart';
+import '../app_constants.dart';
 import '../models/models.dart';
 import '../network/websocket_server.dart';
 import '../network/websocket_client.dart';
@@ -8,6 +9,7 @@ import '../network/device_discovery.dart';
 import '../audio/audio_engine.dart';
 import '../services/file_transfer_service.dart';
 import '../services/foreground_service.dart';
+import '../services/firebase_service.dart';
 
 /// High-level session manager that orchestrates all components.
 ///
@@ -28,6 +30,9 @@ class SessionManager {
 
   WebSocketServer? _server;
   WebSocketClient? _client;
+
+  // Optional Firebase analytics (set via setFirebaseService)
+  FirebaseService? _firebase;
 
   // State
   DeviceRole _role = DeviceRole.none;
@@ -55,6 +60,11 @@ class SessionManager {
     _audioEngine = AudioEngine(logger: _logger);
     _fileTransfer = FileTransferService(logger: _logger);
     _foregroundService = ForegroundService(logger: _logger);
+  }
+
+  /// Set the Firebase service for analytics tracking (optional).
+  void setFirebaseService(FirebaseService service) {
+    _firebase = service;
   }
 
   // ── Public API ──
@@ -140,6 +150,12 @@ class SessionManager {
     _subscriptions.add(
       _discovery.devices.listen((device) {
         _devicesController.add(_discovery.discoveredDevices.values.toList());
+
+        final elapsed = DateTime.now().difference(device.discoveredAt).inMilliseconds;
+        _firebase?.logDeviceDiscovered(
+          deviceType: device.type.name,
+          discoveryTimeMs: elapsed,
+        );
       }),
     );
 
@@ -180,6 +196,12 @@ class SessionManager {
 
     // Start foreground service to keep app alive in background
     await _foregroundService.start(title: 'MusyncMIMO - Groupe actif');
+
+    _firebase?.logSessionStart(
+      sessionId: _currentSession!.sessionId,
+      role: 'host',
+      deviceCount: _currentSession!.slaves.length,
+    );
 
     _logger.i('Host session started: ${_currentSession!.sessionId}');
     return _currentSession!.sessionId;
@@ -232,12 +254,18 @@ class SessionManager {
     // Start foreground service to keep app alive in background
     await _foregroundService.start(title: 'MusyncMIMO - Connecté');
 
+    _firebase?.logSessionStart(
+      sessionId: _client!.sessionId ?? '',
+      role: 'slave',
+      deviceCount: 1,
+    );
+
     _logger.i('Joined session');
     return true;
   }
 
   /// Start playing a track (host only).
-  Future<void> playTrack(AudioTrack track, {int delayMs = 1000, Playlist? playlist}) async {
+  Future<void> playTrack(AudioTrack track, {int delayMs = AppConstants.defaultPlayDelayMs, Playlist? playlist}) async {
     if (_role != DeviceRole.host) {
       throw Exception('Only the host can start playback');
     }
@@ -266,7 +294,7 @@ class SessionManager {
         _logger.i('Broadcasting filename: $trackSource');
         
         // Reduced wait time for slaves to save the file
-        await Future.delayed(const Duration(milliseconds: 500));
+        await Future.delayed(const Duration(milliseconds: AppConstants.fileTransferWaitDelayMs));
       } else {
         _logger.w('Failed to send file, slaves may not be able to play');
       }
@@ -284,7 +312,7 @@ class SessionManager {
         sourceType: track.sourceType,
       );
       // Wait a bit for slaves to preload
-      await Future.delayed(const Duration(milliseconds: 300));
+      await Future.delayed(const Duration(milliseconds: AppConstants.prepareBroadcastDelayMs));
     }
 
     // Broadcast to slaves (they will load and play)
@@ -303,6 +331,11 @@ class SessionManager {
       state: SessionState.playing,
       currentTrack: track,
       startedAt: DateTime.now(),
+    );
+
+    _firebase?.logTrackPlay(
+      trackTitle: track.title,
+      sourceType: track.sourceType.name,
     );
 
     // Broadcast playlist update to slaves
@@ -337,7 +370,7 @@ class SessionManager {
   }
 
   /// Resume playback (host only).
-  Future<void> resumePlayback({int delayMs = 500}) async {
+  Future<void> resumePlayback({int delayMs = AppConstants.resumeDelayMs}) async {
     if (_role != DeviceRole.host) {
       throw Exception('Only the host can control playback');
     }
@@ -370,6 +403,16 @@ class SessionManager {
   /// Leave the current session.
   Future<void> leaveSession() async {
     _logger.i('Leaving session...');
+
+    // Log session end before clearing state
+    if (_currentSession != null) {
+      final duration = DateTime.now().difference(_currentSession!.createdAt);
+      _firebase?.logSessionEnd(
+        sessionId: _currentSession!.sessionId,
+        durationSeconds: duration.inSeconds,
+        deviceCount: _currentSession!.slaves.length,
+      );
+    }
 
     if (_role == DeviceRole.host) {
       await _server?.stop();
@@ -589,14 +632,14 @@ class SessionManager {
           _logger.d('Checking cache file: $cachedFile');
           
           // Wait up to 5 seconds for the file to appear (file transfer might be in progress)
-          for (int i = 0; i < 10; i++) {
+            for (int i = 0; i < AppConstants.fileWaitRetryCount; i++) {
             if (await file.exists()) {
               cachedPath = cachedFile;
               _logger.d('Found cached file after ${i + 1} attempt(s)');
               break;
             }
-            _logger.d('Waiting for file... attempt ${i + 1}/10');
-            await Future.delayed(const Duration(milliseconds: 500));
+            _logger.d('Waiting for file... attempt ${i + 1}/${AppConstants.fileWaitRetryCount}');
+            await Future.delayed(const Duration(milliseconds: AppConstants.fileWaitRetryDelayMs));
           }
         } else {
           _logger.e('No cache path available!');
@@ -627,8 +670,9 @@ class SessionManager {
       _logger.d('Calling audioEngine.loadPreloaded...');
       await _audioEngine.loadPreloaded(track);
       _logger.i('AudioTrack loaded successfully');
-    } catch (e) {
+    } catch (e, stack) {
       _logger.e('!!! FAILED TO LOAD TRACK !!!: $e');
+      FirebaseService().recordError(e, stack, reason: 'loadPreloaded');
       return;
     }
 
@@ -649,14 +693,14 @@ class SessionManager {
           'host startAt: ${event.startAtMs}, local startAt: $localStartAtMs, delay: ${delayMs}ms');
     }
 
-    if (delayMs > 0 && delayMs < 5000) {
+    if (delayMs > 0 && delayMs < AppConstants.lateCompensationThresholdMs) {
       _logger.i('Waiting ${delayMs}ms before playing...');
       await Future.delayed(Duration(milliseconds: delayMs));
     } else if (delayMs < 0) {
       // We're late - try to compensate by seeking forward
       final lateMs = -delayMs;
       _logger.w('Late by ${lateMs}ms, seeking forward to compensate');
-      if (lateMs < 5000) {
+      if (lateMs < AppConstants.lateCompensationThresholdMs) {
         // Only compensate if less than 5 seconds late
         final currentPosition = _audioEngine.position.inMilliseconds;
         await _audioEngine.seek(Duration(milliseconds: currentPosition + lateMs));
@@ -734,6 +778,12 @@ class SessionManager {
     ));
     _logger.i('Sync quality emitted: offset=${stats.offsetMs.toStringAsFixed(1)}ms, '
         'jitter=${stats.jitterMs.toStringAsFixed(1)}ms, quality=${stats.qualityLabel}');
+
+    _firebase?.logSyncQuality(
+      offsetMs: stats.offsetMs,
+      jitterMs: stats.jitterMs,
+      quality: stats.qualityLabel,
+    );
   }
 }
 
