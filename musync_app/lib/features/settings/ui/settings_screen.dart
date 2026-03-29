@@ -215,7 +215,6 @@ class _SettingsView extends StatelessWidget {
           TextButton(
             onPressed: () {
               Navigator.pop(dialogContext);
-              controller.dispose();
             },
             child: const Text('Annuler'),
           ),
@@ -228,13 +227,12 @@ class _SettingsView extends StatelessWidget {
                     .add(DeviceNameChanged(name));
               }
               Navigator.pop(dialogContext);
-              controller.dispose();
             },
             child: const Text('Enregistrer'),
           ),
         ],
       ),
-    );
+    ).whenComplete(() => controller.dispose());
   }
 
   void _confirmClearCache(BuildContext context) {
