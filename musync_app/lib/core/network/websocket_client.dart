@@ -40,7 +40,8 @@ class WebSocketClient {
 
   // Sync state
   static const int _maxSyncAttempts = AppConstants.maxSyncAttempts;
-  StreamSubscription? _syncSub;
+  Completer<ClockSample>? _syncCompleter;
+  int? _syncT1;
 
   WebSocketClient({
     required this.hostIp,
@@ -121,18 +122,16 @@ class WebSocketClient {
       }
 
       if (samples.length >= 3) {
-        // Process samples
+        // Process samples into clock sync engine
         for (final sample in samples) {
           clockSync.processSyncResponse(sample);
         }
 
-        // Trigger calibration processing
-        final success = await clockSync.calibrate();
-        if (success) {
-          _logger.i('Clock sync successful on attempt $i');
-          _eventController.add(const ClientEvent(type: ClientEventType.synced));
-          return true;
-        }
+        // Calibrate directly from collected samples
+        clockSync.calibrateFromSamples(samples);
+        _logger.i('Clock sync successful on attempt $i');
+        _eventController.add(const ClientEvent(type: ClientEventType.synced));
+        return true;
       }
 
       _logger.w('Sync attempt $i failed, retrying...');
@@ -252,35 +251,22 @@ class WebSocketClient {
       throw Exception('Not connected');
     }
 
-    final t1 = DateTime.now().millisecondsSinceEpoch;
+    // Cancel any previous pending sync
+    if (_syncCompleter != null && !_syncCompleter!.isCompleted) {
+      _syncCompleter!.completeError(TimeoutException('Superseded by new sync'));
+    }
+
+    _syncT1 = DateTime.now().millisecondsSinceEpoch;
+    _syncCompleter = Completer<ClockSample>();
+
     final request = ProtocolMessage.syncRequest();
     _socket!.add(request.encode());
 
-    // Cancel any previous sync subscription to avoid listener leaks
-    await _syncSub?.cancel();
-
-    // Wait for sync_response
-    final completer = Completer<ClockSample>();
-
-    _syncSub = _socket!.listen((data) {
-      try {
-        final msg = ProtocolMessage.decode(data as String);
-        if (msg.type == MessageType.syncResponse) {
-          final t2 = msg.payload['t2'] as int;
-          final t3 = msg.payload['t3'] as int;
-          final t4 = DateTime.now().millisecondsSinceEpoch;
-          _syncSub?.cancel();
-          _syncSub = null;
-          completer.complete(ClockSample(t1, t2, t3, t4));
-        }
-      } catch (_) {}
-    });
-
-    return completer.future.timeout(
+    return _syncCompleter!.future.timeout(
       const Duration(seconds: 2),
       onTimeout: () {
-        _syncSub?.cancel();
-        _syncSub = null;
+        _syncCompleter = null;
+        _syncT1 = null;
         throw TimeoutException('Sync exchange timed out');
       },
     );
@@ -299,6 +285,9 @@ class WebSocketClient {
           break;
         case MessageType.syncRequest:
           _handleHostSyncRequest(message);
+          break;
+        case MessageType.syncResponse:
+          _handleSyncResponse(message);
           break;
         case MessageType.clockAdjust:
           _handleClockAdjust(message);
@@ -378,6 +367,22 @@ class WebSocketClient {
     final t3 = DateTime.now().millisecondsSinceEpoch;
     final response = ProtocolMessage.syncResponse(t1: t1, t2: t2, t3: t3);
     _socket?.add(response.encode());
+  }
+
+  void _handleSyncResponse(ProtocolMessage message) {
+    if (_syncCompleter == null || _syncCompleter!.isCompleted) {
+      _logger.d('Received syncResponse but no pending sync request');
+      return;
+    }
+
+    final t1 = _syncT1!;
+    final t2 = message.payload['t2'] as int;
+    final t3 = message.payload['t3'] as int;
+    final t4 = DateTime.now().millisecondsSinceEpoch;
+
+    _syncCompleter!.complete(ClockSample(t1, t2, t3, t4));
+    _syncCompleter = null;
+    _syncT1 = null;
   }
 
   void _handleClockAdjust(ProtocolMessage message) {

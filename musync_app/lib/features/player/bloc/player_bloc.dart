@@ -109,6 +109,16 @@ class TrackCompleted extends PlayerEvent {
   const TrackCompleted();
 }
 
+class SyncQualityUpdated extends PlayerEvent {
+  final String qualityLabel;
+  final double offsetMs;
+
+  const SyncQualityUpdated({required this.qualityLabel, required this.offsetMs});
+
+  @override
+  List<Object?> get props => [qualityLabel, offsetMs];
+}
+
 // ── State ──
 
 class PlayerState extends Equatable {
@@ -119,6 +129,8 @@ class PlayerState extends Equatable {
   final Duration? duration;
   final double volume;
   final String? errorMessage;
+  final String? syncQualityLabel;
+  final double? syncOffsetMs;
 
   const PlayerState({
     this.status = PlayerStatus.idle,
@@ -128,6 +140,8 @@ class PlayerState extends Equatable {
     this.duration,
     this.volume = 1.0,
     this.errorMessage,
+    this.syncQualityLabel,
+    this.syncOffsetMs,
   });
 
   bool get hasNext => playlist.hasNext;
@@ -141,6 +155,8 @@ class PlayerState extends Equatable {
     Duration? duration,
     double? volume,
     String? errorMessage,
+    String? syncQualityLabel,
+    double? syncOffsetMs,
     bool clearTrack = false,
   }) {
     return PlayerState(
@@ -151,6 +167,8 @@ class PlayerState extends Equatable {
       duration: duration ?? this.duration,
       volume: volume ?? this.volume,
       errorMessage: errorMessage,
+      syncQualityLabel: syncQualityLabel ?? this.syncQualityLabel,
+      syncOffsetMs: syncOffsetMs ?? this.syncOffsetMs,
     );
   }
 
@@ -163,6 +181,8 @@ class PlayerState extends Equatable {
         duration,
         volume,
         errorMessage,
+        syncQualityLabel,
+        syncOffsetMs,
       ];
 }
 
@@ -183,6 +203,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
   StreamSubscription? _stateSub;
   StreamSubscription? _positionSub;
   StreamSubscription? _clientEventSub;
+  StreamSubscription? _syncQualitySub;
 
   PlayerBloc({required this.sessionManager, Logger? logger})
       : _logger = logger ?? Logger(),
@@ -202,6 +223,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     on<PositionUpdated>(_onPositionUpdated);
     on<AudioStateChanged>(_onAudioStateChanged);
     on<TrackCompleted>(_onTrackCompleted);
+    on<SyncQualityUpdated>(_onSyncQualityUpdated);
 
     // Listen to audio engine state (single subscription)
     _stateSub = sessionManager.audioEngine.stateStream.listen((audioState) {
@@ -230,6 +252,14 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
         // Playlist update handled by DiscoveryBloc
         _logger.d('Playlist update received');
       }
+    });
+
+    // Listen to sync quality updates
+    _syncQualitySub = sessionManager.syncQualityStream.listen((update) {
+      add(SyncQualityUpdated(
+        qualityLabel: update.qualityLabel,
+        offsetMs: update.offsetMs,
+      ));
     });
   }
 
@@ -304,12 +334,20 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     }
 
     try {
-      if (sessionManager.role == DeviceRole.host) {
-        // Host: play locally and broadcast to slaves
-        await sessionManager.playTrack(track, playlist: state.playlist);
+      // If resuming from pause, just resume instead of reloading the track
+      if (state.status == PlayerStatus.paused) {
+        if (sessionManager.role == DeviceRole.host) {
+          await sessionManager.resumePlayback();
+        } else {
+          await sessionManager.audioEngine.play();
+        }
       } else {
-        // Solo play or slave: just play locally
-        await sessionManager.audioEngine.play();
+        // Fresh play: load and play from start
+        if (sessionManager.role == DeviceRole.host) {
+          await sessionManager.playTrack(track, playlist: state.playlist);
+        } else {
+          await sessionManager.audioEngine.play();
+        }
       }
       emit(state.copyWith(status: PlayerStatus.playing, errorMessage: null));
     } catch (e) {
@@ -567,6 +605,16 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     }
   }
 
+  void _onSyncQualityUpdated(
+    SyncQualityUpdated event,
+    Emitter<PlayerState> emit,
+  ) {
+    emit(state.copyWith(
+      syncQualityLabel: event.qualityLabel,
+      syncOffsetMs: event.offsetMs,
+    ));
+  }
+
   /// Waits for the audio engine's duration to become available after loading.
   /// Listens on the durationStream instead of using an arbitrary delay.
   /// Falls back to reading duration directly after timeout.
@@ -594,6 +642,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     _stateSub?.cancel();
     _positionSub?.cancel();
     _clientEventSub?.cancel();
+    _syncQualitySub?.cancel();
     return super.close();
   }
 }

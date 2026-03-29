@@ -448,6 +448,12 @@ class DeviceDiscovery {
   /// Start mDNS discovery using the multicast_dns package.
   Future<void> _startMdnsDiscovery(
       {Duration interval = const Duration(seconds: 5)}) async {
+    // mDNS is not supported on Windows (reusePort error)
+    if (Platform.isWindows) {
+      _logger.i('mDNS not supported on Windows, skipping');
+      return;
+    }
+
     try {
       _mdnsClient = MDnsClient();
       await _mdnsClient!.start();

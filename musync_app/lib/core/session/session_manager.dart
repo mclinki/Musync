@@ -508,6 +508,7 @@ class SessionManager {
         break;
       case ClientEventType.synced:
         _logger.i('Clock synchronized');
+        _emitSyncQuality();
         break;
       case ClientEventType.prepareCommand:
         _handlePrepareCommand(event);

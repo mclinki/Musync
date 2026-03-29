@@ -151,6 +151,16 @@ class ClockSyncEngine {
     return true;
   }
 
+  /// Calibrate directly from pre-collected samples.
+  /// Used when sync exchanges are managed externally (e.g., by WebSocketClient).
+  void calibrateFromSamples(List<ClockSample> samples) {
+    if (samples.length < 3) {
+      _logger.w('Not enough samples for calibration (${samples.length})');
+      return;
+    }
+    _processCalibrationSamples(samples);
+  }
+
   /// Start automatic periodic calibration.
   void startAutoCalibration({Duration interval = const Duration(milliseconds: AppConstants.autoCalibrationIntervalMs)}) {
     stopAutoCalibration();

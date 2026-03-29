@@ -47,8 +47,8 @@ class AppConstants {
   static const int skipPreviousRestartThresholdSeconds = 3;
 
   // ── Session ───────────────────────────────────────────
-  static const int defaultPlayDelayMs = 1000;
-  static const int resumeDelayMs = 500;
+  static const int defaultPlayDelayMs = 3000;
+  static const int resumeDelayMs = 1500;
   static const int prepareBroadcastDelayMs = 300;
   static const int fileTransferWaitDelayMs = 500;
   static const int fileWaitRetryCount = 10;

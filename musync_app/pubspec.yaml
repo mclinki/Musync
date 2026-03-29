@@ -12,6 +12,7 @@ dependencies:
 
   # Audio
   just_audio: ^0.9.40
+  just_audio_windows: ^0.2.2
   audio_session: ^0.1.19
 
   # Network

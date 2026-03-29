@@ -121,6 +121,17 @@ class _PlayerView extends StatelessWidget {
                   ),
                 ],
 
+                // Sync quality
+                if (state.syncQualityLabel != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Sync: ${state.syncQualityLabel}${state.syncOffsetMs != null ? ' (${state.syncOffsetMs!.toStringAsFixed(1)}ms)' : ''}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
+                  ),
+                ],
+
                 // Error message
                 if (state.errorMessage != null) ...[
                   const SizedBox(height: 16),

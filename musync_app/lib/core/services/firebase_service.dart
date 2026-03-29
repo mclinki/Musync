@@ -7,6 +7,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:logger/logger.dart';
 import '../app_constants.dart';
+import '../../firebase_options.dart';
 
 /// Centralized Firebase service for MusyncMIMO.
 ///
@@ -49,11 +50,19 @@ class FirebaseService {
       return;
     }
 
+    // Firebase is not supported on Windows/desktop — skip gracefully
+    if (defaultTargetPlatform == TargetPlatform.windows) {
+      _logger.i('Firebase not supported on Windows, skipping');
+      return;
+    }
+
     try {
       _logger.i('Initializing Firebase...');
 
       // 1. Core
-      await Firebase.initializeApp();
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
       _logger.i('Firebase Core initialized');
 
       // 2. Crashlytics
