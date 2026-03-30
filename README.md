@@ -8,7 +8,7 @@ Turn any collection of phones, tablets, or speakers into a synchronized multi-ro
 [![Dart](https://img.shields.io/badge/Dart-3.6-blue.svg)](https://dart.dev)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-48%2F48-passing-brightgreen.svg)](musync_app/test/)
-[![Version](https://img.shields.io/badge/Version-0.1.3-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-0.1.11-blue.svg)](CHANGELOG.md)
 
 ---
 
@@ -32,11 +32,13 @@ Turn any collection of phones, tablets, or speakers into a synchronized multi-ro
 
 | Platform | Chemin | Statut |
 |----------|--------|--------|
-| **Android** | `musync_app/build/app/outputs/flutter-apk/app-debug.apk` | ✅ v0.1.3 |
+| **Android** | `musync_app/build/app/outputs/flutter-apk/app-debug.apk` | ✅ v0.1.11 |
 | **iOS** | Build via Xcode (`flutter build ios`) | ⚠️ Nécessite macOS |
+| **Windows** | `musync_app/build/windows/x64/Runner/Debug/` | ✅ v0.1.11 |
+| **macOS** | Build via Xcode (`flutter build macos`) | ⚠️ Nécessite macOS |
 
-> **Note** : Les fichiers APK ne sont pas inclus dans le dépôt GitHub (trop volumineux). 
-> Pour obtenir l'APK, compilez le projet avec `flutter build apk --debug`.
+> **Note** : Les fichiers binaires ne sont pas inclus dans le dépôt GitHub (trop volumineux).
+> Pour obtenir un build, compilez le projet (voir [Tuto pour les nuls](#-tuto-pour-les-nuls) ci-dessous).
 
 ---
 
@@ -59,7 +61,9 @@ MusyncMIMO/
 │   │   └── main.dart
 │   ├── test/                     # Unit & BLoC tests (48 tests)
 │   ├── android/                  # Android config + ForegroundService
-│   └── ios/                      # iOS config
+│   ├── ios/                      # iOS config
+│   ├── windows/                  # Windows desktop config
+│   └── macos/                    # macOS desktop config
 ├── CHANGELOG.md                  # Version history
 ├── TASKS_BACKLOG.md              # Remaining tasks
 └── README.md                     # This file
@@ -67,7 +71,205 @@ MusyncMIMO/
 
 ---
 
-## 🚀 Quick Start
+## 📖 Tuto pour les nuls
+
+> **Objectif** : Installer et lancer MusyncMIMO sur votre appareil, même si vous n'avez jamais touché à Flutter.
+
+### Prérequis communs
+
+Avant tout, installez **Git** pour télécharger le code :
+- **Windows** : [git-scm.com](https://git-scm.com) → télécharger → Next/Next/Finish
+- **Mac** : ouvrez le Terminal, tapez `git --version`, macOS proposera l'installation automatique
+
+Ensuite, clonez le projet :
+```bash
+git clone https://github.com/mclinki/Musync.git
+cd Musync/musync_app
+```
+
+---
+
+### 🤖 Android
+
+#### Option A — Compiler l'APK (recommandé)
+
+**Étape 1 : Installer Flutter**
+
+1. Téléchargez Flutter : [docs.flutter.dev/get-started/install/windows/android](https://docs.flutter.dev/get-started/install/windows/android)
+2. Dézippez le dossier `flutter` dans `C:\` (Windows) ou `~/` (Mac/Linux)
+3. Ajoutez Flutter au PATH :
+   - **Windows** : Paramètres → Variables d'environnement → PATH → Ajouter `C:\flutter\bin`
+   - **Mac/Linux** : ajoutez `export PATH="$HOME/flutter/bin:$PATH"` dans `~/.bashrc` ou `~/.zshrc`
+4. Vérifiez : ouvrez un terminal et tapez `flutter doctor`
+   - Résolvez les erreurs affichées (Android SDK, etc.)
+
+**Étape 2 : Installer Android Studio**
+
+1. Téléchargez [Android Studio](https://developer.android.com/studio)
+2. Installez-le, puis lancez-le
+3. Allez dans **More Actions → SDK Manager** :
+   - Onglet **SDK Platforms** : cochez **Android 14 (API 34)**
+   - Onglet **SDK Tools** : cochez **Android SDK Command-line Tools**
+4. Acceptez les licences : `flutter doctor --android-licenses` (tapez `y` pour chaque)
+
+**Étape 3 : Brancher votre téléphone**
+
+1. Sur votre Android : **Paramètres → À propos → Appuyez 7 fois sur "Numéro de build"** (mode développeur)
+2. Retour : **Paramètres → Options développeur → Activer le débogage USB**
+3. Branchez le téléphone en USB, autorisez le débogage sur l'écran
+
+**Étape 4 : Compiler et installer**
+
+```bash
+cd Musync/musync_app
+flutter pub get
+flutter run
+```
+
+> L'app se lance directement sur votre téléphone.
+> Pour générer un APK standalone : `flutter build apk --debug`
+> L'APK sera dans `build/app/outputs/flutter-apk/app-debug.apk`
+
+---
+
+### 🍎 iPhone
+
+> ⚠️ **Nécessite un Mac** avec Xcode installé. Impossible sur Windows.
+
+**Étape 1 : Installer Xcode**
+
+1. Ouvrez l'**App Store** sur votre Mac
+2. Cherchez **Xcode** → Installer (≈15 Go, patience)
+3. Ouvrez Xcode, acceptez la licence
+4. Installez les outils en ligne de commande : `sudo xcode-select --install`
+
+**Étape 2 : Installer Flutter**
+
+```bash
+# Télécharger Flutter
+cd ~/development
+git clone https://github.com/flutter/flutter.git -b stable
+
+# Ajouter au PATH
+export PATH="$HOME/development/flutter/bin:$PATH"
+echo 'export PATH="$HOME/development/flutter/bin:$PATH"' >> ~/.zshrc
+
+# Vérifier
+flutter doctor
+```
+
+**Étape 3 : Ouvrir le projet dans Xcode**
+
+```bash
+cd Musync/musync_app
+flutter pub get
+open ios/Runner.xcworkspace
+```
+
+**Étape 4 : Configurer la signature**
+
+1. Dans Xcode : sélectionnez **Runner** dans la barre latérale
+2. Onglet **Signing & Capabilities**
+3. Sélectionnez votre **Team** (Apple ID personnel gratuit = 7 jours de validité)
+4. Changez le **Bundle Identifier** si nécessaire (ex: `com.votrenom.musync`)
+
+**Étape 5 : Lancer sur le iPhone**
+
+1. Branchez votre iPhone en USB
+3. Dans Xcode : sélectionnez votre iPhone en haut → ▶️ Play
+4. Sur l'iPhone : **Réglages → Général → VPN et gestion de l'appareil** → faire confiance au développeur
+
+> **Astuce** : avec un Apple ID gratuit, l'app expire après 7 jours. Pour un usage prolongé, un compte développeur Apple (99$/an) est nécessaire.
+
+---
+
+### 🪟 Windows
+
+**Étape 1 : Installer Flutter**
+
+1. Téléchargez Flutter : [docs.flutter.dev/get-started/install/windows/desktop](https://docs.flutter.dev/get-started/install/windows/desktop)
+2. Dézippez dans `C:\flutter`
+3. Ajoutez `C:\flutter\bin` au PATH (Paramètres système)
+4. Vérifiez : `flutter doctor`
+
+**Étape 2 : Activer le support Windows desktop**
+
+```bash
+flutter config --enable-windows-desktop
+```
+
+**Étape 3 : Installer Visual Studio**
+
+1. Téléchargez [Visual Studio Community](https://visualstudio.microsoft.com/fr/) (gratuit)
+2. Pendant l'installation, cochez **Développement desktop en C++**
+3. Redémarrez le PC
+
+**Étape 4 : Compiler et lancer**
+
+```bash
+cd Musync/musync_app
+flutter pub get
+flutter run -d windows
+```
+
+> Pour générer un exécutable standalone :
+> ```bash
+> flutter build windows
+> ```
+> Le binaire sera dans `build/windows/x64/runner/Release/`
+
+---
+
+### 🍏 macOS
+
+**Étape 1 : Installer Xcode**
+
+1. App Store → **Xcode** → Installer
+2. Terminal : `sudo xcode-select --install`
+3. Accepter la licence : `sudo xcodebuild -license accept`
+
+**Étape 2 : Installer Flutter**
+
+```bash
+cd ~/development
+git clone https://github.com/flutter/flutter.git -b stable
+export PATH="$HOME/development/flutter/bin:$PATH"
+echo 'export PATH="$HOME/development/flutter/bin:$PATH"' >> ~/.zshrc
+flutter doctor
+```
+
+**Étape 3 : Activer le support macOS desktop**
+
+```bash
+flutter config --enable-macos-desktop
+```
+
+**Étape 4 : Compiler et lancer**
+
+```bash
+cd Musync/musync_app
+flutter pub get
+flutter run -d macos
+```
+
+> Pour générer une app `.app` :
+> ```bash
+> flutter build macos
+> ```
+> L'app sera dans `build/macos/Build/Products/Release/musync_mimo.app`
+
+---
+
+### 🎉 Utilisation
+
+1. **Lancez l'app** sur au moins 2 appareils connectés au **même Wi-Fi**
+2. Sur l'appareil **hôte** : appuyez sur **"Créer ou rejoindre un groupe"** → l'app scanne et attend
+3. Sur l'appareil **invité** : appuyez sur **"Créer ou rejoindre un groupe"** → l'hôte apparaît → appuyez dessus
+4. Sur l'hôte : chargez un fichier audio → la musique se lance **synchronisée** sur tous les appareils !
+
+---
+
+## 🚀 Quick Start (développeurs)
 
 ### Prerequisites
 
@@ -148,7 +350,7 @@ Firebase is optional — the app works without it. To enable:
 | **Networking** | WebSocket (web_socket_channel) |
 | **Discovery** | mDNS (multicast_dns) + TCP fallback |
 | **Backend** | Firebase (optional: Crashlytics, Analytics, Firestore) |
-| **Platform** | Android (foreground service) / iOS |
+| **Platform** | Android / iOS / Windows / macOS |
 
 ---
 
@@ -205,6 +407,7 @@ flutter analyze
 - [x] Skip next/prev
 - [x] Runtime permissions (Android 13+)
 - [x] Settings screen
+- [x] Windows desktop support
 
 ### 🔜 v0.2
 - [ ] Per-device volume control

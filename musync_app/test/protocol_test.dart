@@ -20,7 +20,7 @@ void main() {
       expect(decoded.timestampMs, 1234567890);
     });
 
-    test('hello message contains session and device', () {
+    test('join message contains device info', () {
       final device = DeviceInfo(
         id: 'test-id',
         name: 'Test Device',
@@ -30,14 +30,13 @@ void main() {
         discoveredAt: DateTime.now(),
       );
 
-      final msg = ProtocolMessage.hello(
-        sessionId: 'session-123',
+      final msg = ProtocolMessage.join(
         device: device,
       );
 
-      expect(msg.type, MessageType.hello);
-      expect(msg.payload['session_id'], 'session-123');
+      expect(msg.type, MessageType.join);
       expect(msg.payload['device']['name'], 'Test Device');
+      expect(msg.payload['device']['id'], 'test-id');
     });
 
     test('play message contains timing info', () {
