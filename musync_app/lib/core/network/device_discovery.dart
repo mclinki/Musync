@@ -140,6 +140,7 @@ class DeviceDiscovery {
   }
 
   /// Get the local IP address of this device.
+  /// Filters out virtual adapters (VirtualBox, VMware, etc.)
   Future<String?> getLocalIp() async {
     try {
       final interfaces = await NetworkInterface.list(
@@ -147,18 +148,54 @@ class DeviceDiscovery {
         includeLoopback: false,
       );
 
+      // Known virtual adapter name patterns to exclude
+      const virtualPatterns = [
+        'virtualbox',
+        'vbox',
+        'vmware',
+        'vethernet',
+        'hyper-v',
+        'docker',
+        'vnet',
+        'tap-',
+        'tun-',
+        'hamachi',
+        'zerotier',
+        'tailscale',
+        'wg-',
+        'loopback',
+        'pseudo',
+      ];
+
+      bool _isVirtual(String name) {
+        final lower = name.toLowerCase();
+        return virtualPatterns.any((p) => lower.contains(p));
+      }
+
+      // Preferred real adapter patterns
+      const realPatterns = ['wlan', 'wi-fi', 'wifi', 'en0', 'wlp', 'eth', 'net'];
+
+      // First pass: look for known real adapters, excluding virtual ones
       for (final interface in interfaces) {
+        if (_isVirtual(interface.name)) continue;
         for (final addr in interface.addresses) {
-          if (interface.name.toLowerCase().contains('wlan') ||
-              interface.name.toLowerCase().contains('wi-fi') ||
-              interface.name.toLowerCase().contains('en0') ||
-              interface.name.toLowerCase().contains('wlp') ||
-              interface.name.toLowerCase().contains('eth')) {
+          if (realPatterns.any((p) => interface.name.toLowerCase().contains(p))) {
             return addr.address;
           }
         }
       }
 
+      // Second pass: any non-virtual, non-loopback address
+      for (final interface in interfaces) {
+        if (_isVirtual(interface.name)) continue;
+        for (final addr in interface.addresses) {
+          if (!addr.isLoopback) {
+            return addr.address;
+          }
+        }
+      }
+
+      // Last resort: return first non-loopback (even if virtual)
       for (final interface in interfaces) {
         for (final addr in interface.addresses) {
           if (!addr.isLoopback) {
