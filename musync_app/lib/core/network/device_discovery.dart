@@ -167,7 +167,7 @@ class DeviceDiscovery {
         'pseudo',
       ];
 
-      bool _isVirtual(String name) {
+      bool isVirtual(String name) {
         final lower = name.toLowerCase();
         return virtualPatterns.any((p) => lower.contains(p));
       }
@@ -177,7 +177,7 @@ class DeviceDiscovery {
 
       // First pass: look for known real adapters, excluding virtual ones
       for (final interface in interfaces) {
-        if (_isVirtual(interface.name)) continue;
+        if (isVirtual(interface.name)) continue;
         for (final addr in interface.addresses) {
           if (realPatterns.any((p) => interface.name.toLowerCase().contains(p))) {
             return addr.address;
@@ -187,7 +187,7 @@ class DeviceDiscovery {
 
       // Second pass: any non-virtual, non-loopback address
       for (final interface in interfaces) {
-        if (_isVirtual(interface.name)) continue;
+        if (isVirtual(interface.name)) continue;
         for (final addr in interface.addresses) {
           if (!addr.isLoopback) {
             return addr.address;
@@ -542,10 +542,7 @@ class DeviceDiscovery {
             break;
           }
 
-          if (ip == null) {
-            // Try to extract IP from hostname
-            ip = await _resolveHostname(host);
-          }
+          ip ??= await _resolveHostname(host);
 
           if (ip != null) {
             // Get TXT records for device metadata

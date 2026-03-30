@@ -6,7 +6,7 @@ class AppConstants {
   AppConstants._(); // Prevent instantiation
 
   // ── App Info ──────────────────────────────────────────
-  static const String appVersion = '0.1.10';
+  static const String appVersion = '0.1.11';
   static const String appName = 'MusyncMIMO';
 
   // ── Network ───────────────────────────────────────────
@@ -54,6 +54,7 @@ class AppConstants {
   static const int fileWaitRetryCount = 10;
   static const int fileWaitRetryDelayMs = 500;
   static const int lateCompensationThresholdMs = 5000;
+  static const int lateCompensationMaxCompensationMs = 30000;
 
   // ── Discovery ─────────────────────────────────────────
   static const int tcpScanBatchSize = 20;

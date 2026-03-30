@@ -80,19 +80,6 @@ class ProtocolMessage {
 
   // ── Factory constructors for each message type ──
 
-  factory ProtocolMessage.hello({
-    required String sessionId,
-    required DeviceInfo device,
-  }) {
-    return ProtocolMessage(
-      type: MessageType.hello,
-      payload: {
-        'session_id': sessionId,
-        'device': device.toJson(),
-      },
-    );
-  }
-
   factory ProtocolMessage.join({
     required DeviceInfo device,
   }) {

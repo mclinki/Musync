@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:logger/logger.dart';
 import '../../../core/core.dart';
-import '../../../core/services/firebase_service.dart';
 
 // ── Events ──
 
@@ -127,6 +126,13 @@ class PlaylistUpdated extends DiscoveryEvent {
 
   @override
   List<Object?> get props => [tracks, currentIndex];
+}
+
+class _DevicesSynced extends DiscoveryEvent {
+  final List<DeviceInfo> devices;
+  const _DevicesSynced(this.devices);
+  @override
+  List<Object?> get props => [devices];
 }
 
 // ── State ──
@@ -348,16 +354,12 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
     on<SyncQualityChanged>(_onSyncQualityChanged);
     on<FileTransferProgressChanged>(_onFileTransferProgressChanged);
     on<PlaylistUpdated>(_onPlaylistUpdated);
+    on<_DevicesSynced>(_onDevicesSynced);
 
     // Listen to session manager
     _devicesSub = sessionManager.devicesStream.listen((devices) {
-      // Sync available devices from session manager
-      final currentIds = state.availableDevices.map((d) => d.id).toSet();
-      for (final device in devices) {
-        if (!currentIds.contains(device.id)) {
-          add(DeviceFound(device));
-        }
-      }
+      // Full sync: replace available devices with current list from session manager
+      add(_DevicesSynced(devices));
     });
 
     _stateSub = sessionManager.stateStream.listen((state) {
@@ -671,6 +673,13 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
       playlistTracks: event.tracks,
       playlistCurrentIndex: event.currentIndex,
     ));
+  }
+
+  void _onDevicesSynced(
+    _DevicesSynced event,
+    Emitter<DiscoveryState> emit,
+  ) {
+    emit(state.copyWith(availableDevices: event.devices));
   }
 
   @override

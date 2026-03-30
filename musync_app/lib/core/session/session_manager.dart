@@ -688,7 +688,7 @@ class SessionManager {
           _logger.d('Checking cache file: $cachedFile');
           
           // Wait up to 5 seconds for the file to appear (file transfer might be in progress)
-            for (int i = 0; i < AppConstants.fileWaitRetryCount; i++) {
+          for (int i = 0; i < AppConstants.fileWaitRetryCount; i++) {
             if (await file.exists()) {
               cachedPath = cachedFile;
               _logger.d('Found cached file after ${i + 1} attempt(s)');
@@ -709,6 +709,15 @@ class SessionManager {
         _logger.e('!!! FILE NOT FOUND !!!');
         _logger.e('Event trackSource was: ${event.trackSource}');
         _logger.e('Cache path: ${_fileTransfer.cachePath}');
+        _logger.e('Cached file path from memory: $_cachedFilePath');
+        // List files in cache directory for debugging
+        final cacheDir = _fileTransfer.cachePath != null ? Directory(_fileTransfer.cachePath!) : null;
+        if (cacheDir != null && await cacheDir.exists()) {
+          final files = await cacheDir.list().toList();
+          _logger.e('Files in cache dir: ${files.map((f) => f.path).join(', ')}');
+        } else {
+          _logger.e('Cache directory does not exist');
+        }
         _logger.w('File not received yet, skipping playback');
         return; // Don't emit error, just skip
       }
@@ -753,16 +762,21 @@ class SessionManager {
       _logger.i('Waiting ${delayMs}ms before playing...');
       await Future.delayed(Duration(milliseconds: delayMs));
     } else if (delayMs < 0) {
-      // We're late - try to compensate by seeking forward
+      // We're late - compensate by seeking forward
       final lateMs = -delayMs;
       _logger.w('Late by ${lateMs}ms, seeking forward to compensate');
-      if (lateMs < AppConstants.lateCompensationThresholdMs) {
-        // Only compensate if less than 5 seconds late
+      if (lateMs < AppConstants.lateCompensationMaxCompensationMs) {
+        // Compensate by seeking forward, even for large offsets
         final currentPosition = _audioEngine.position.inMilliseconds;
         await _audioEngine.seek(Duration(milliseconds: currentPosition + lateMs));
+        _logger.i('Seeked to ${currentPosition + lateMs}ms to compensate for ${lateMs}ms delay');
       } else {
-        _logger.e('Too late (${lateMs}ms), playing without compensation');
+        _logger.e('Too late (${lateMs}ms > ${AppConstants.lateCompensationMaxCompensationMs}ms), playing from current position');
       }
+    } else if (delayMs >= AppConstants.lateCompensationThresholdMs) {
+      // Very far in the future - shouldn't happen, but cap the wait
+      _logger.w('Delay too large (${delayMs}ms), capping to ${AppConstants.lateCompensationThresholdMs}ms');
+      await Future.delayed(const Duration(milliseconds: AppConstants.lateCompensationThresholdMs));
     }
 
     _logger.d('Calling audioEngine.play()...');

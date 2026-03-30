@@ -4,7 +4,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:firebase_analytics/firebase_analytics.dart';
 import 'core/core.dart';
-import 'core/services/permission_service.dart';
 import 'features/discovery/ui/discovery_screen.dart';
 import 'features/player/ui/player_screen.dart';
 import 'features/settings/bloc/settings_bloc.dart';

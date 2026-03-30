@@ -54,7 +54,9 @@ class FileTransferService {
   String? get cachePath => _tempDir?.path;
 
   /// Send a file to all connected slaves.
-  /// Returns a Future that completes when all slaves have acknowledged.
+  /// Returns true when all chunks have been sent (does NOT wait for ACKs).
+  /// ACKs are handled asynchronously by the session manager.
+  /// The [timeout] parameter is reserved for future ACK-based confirmation.
   Future<bool> sendFile({
     required String filePath,
     required WebSocketServer server,
@@ -90,36 +92,63 @@ class FileTransferService {
     // Wait a bit for slaves to prepare
     await Future.delayed(const Duration(milliseconds: 500));
 
-    // Send chunks
-    final bytes = await file.readAsBytes();
+    // Send chunks - stream from disk instead of loading entire file into memory
+    final reader = file.openRead();
     int offset = 0;
+    int chunkIndex = 0;
+    final buffer = <int>[];
 
-    for (int i = 0; i < totalChunks; i++) {
-      final end = (offset + chunkSize).clamp(0, bytes.length);
-      final chunk = bytes.sublist(offset, end);
-      final base64Data = base64Encode(chunk);
+    await for (final data in reader) {
+      buffer.addAll(data);
 
+      while (buffer.length >= chunkSize) {
+        final chunk = buffer.sublist(0, chunkSize);
+        buffer.removeRange(0, chunkSize);
+        final base64Data = base64Encode(chunk);
+
+        final chunkMsg = ProtocolMessage.fileTransferChunk(
+          chunkIndex: chunkIndex,
+          data: base64Data,
+        );
+        server.broadcast(chunkMsg);
+
+        offset += chunkSize;
+        chunkIndex++;
+        _logger.d('Sent chunk $chunkIndex/$totalChunks (${formatBytes(offset)}/${formatBytes(fileSize)})');
+
+        // Report progress
+        _progressController.add(TransferProgress(
+          fileName: fileName,
+          bytesTransferred: offset,
+          totalBytes: fileSize,
+          isIncoming: false,
+        ));
+
+        // Small delay to avoid flooding
+        if (chunkIndex % AppConstants.interChunkDelayInterval == 0) {
+          await Future.delayed(const Duration(milliseconds: AppConstants.interChunkDelayMs));
+        }
+      }
+    }
+
+    // Send remaining bytes as last chunk
+    if (buffer.isNotEmpty) {
+      final base64Data = base64Encode(buffer);
       final chunkMsg = ProtocolMessage.fileTransferChunk(
-        chunkIndex: i,
+        chunkIndex: chunkIndex,
         data: base64Data,
       );
       server.broadcast(chunkMsg);
+      offset += buffer.length;
+      chunkIndex++;
+      _logger.d('Sent final chunk $chunkIndex/$totalChunks (${formatBytes(offset)}/${formatBytes(fileSize)})');
 
-      offset = end;
-      _logger.d('Sent chunk $i/$totalChunks (${formatBytes(offset)}/${formatBytes(fileSize)})');
-      
-      // Report progress
       _progressController.add(TransferProgress(
         fileName: fileName,
         bytesTransferred: offset,
         totalBytes: fileSize,
         isIncoming: false,
       ));
-
-      // Small delay to avoid flooding - but make it faster
-      if (i % AppConstants.interChunkDelayInterval == 0) {
-        await Future.delayed(const Duration(milliseconds: AppConstants.interChunkDelayMs));
-      }
     }
 
     // Signal end of transfer
@@ -127,7 +156,8 @@ class FileTransferService {
     server.broadcast(endMsg);
 
     _logger.i('=== FILE TRANSFER COMPLETE ===');
-    _logger.i('File sent: $fileName');
+    _logger.i('File sent: $fileName ($totalChunks chunks, ${formatBytes(fileSize)})');
+    _logger.i('Slaves count at transfer end: ${server.slaveCount}');
     return true;
   }
 

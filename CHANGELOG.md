@@ -5,6 +5,31 @@
 
 ---
 
+## Session du 2026-03-30 (v0.1.11)
+
+### Contexte
+Bug critique : play depuis hôte mobile ne lance pas la musique sur les invités. Cause identifiée : file transfer lit le fichier entier en mémoire (OOM sur mobile) + compensation clock offset trop limitée (5s max). Audit complet de toutes les fonctions → 14 bugs/incohérences supplémentaires trouvés et corrigés.
+
+### Modifications
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 1 | `FIX` | File transfer : remplacé `readAsBytes()` (charge tout en RAM) par `openRead()` streaming par chunks → élimine OOM sur mobile | `file_transfer_service.dart` |
+| 2 | `FIX` | Compensation clock offset : nouvelle limite 30s (au lieu de 5s) + gestion cas `delayMs` très positif (cap attente) | `session_manager.dart`, `app_constants.dart` |
+| 3 | `FIX` | Logging diagnostique : contenu du cache directory quand fichier non trouvé + nombre de slaves au transfert | `session_manager.dart`, `file_transfer_service.dart` |
+| 4 | `FIX` | `dispose()` WebSocketServer n'attendait pas `stop()` (async) → fermeture incomplète | `websocket_server.dart` |
+| 5 | `FIX` | `sendFile` doc indiquait "complète quand ACK reçus" mais ne vérifiait jamais les ACKs → doc corrigée, timeout documenté | `file_transfer_service.dart` |
+| 6 | `FIX` | DiscoveryBloc sync devices ne retirait jamais les devices disparus → remplacement par sync complet via `_DevicesSynced` | `discovery_bloc.dart` |
+| 7 | `FIX` | Port `7890` codé en dur dans dialog IP manuelle → remplacé par `kDefaultPort` | `discovery_screen.dart` |
+| 8 | `CLEANUP` | Suppression factory `hello()` morte (jamais appelée, client envoie `join`) | `protocol_message.dart` |
+| 9 | `CLEANUP` | Imports inutiles `firebase_service.dart` supprimés (déjà dans `core.dart`) | `player_bloc.dart`, `discovery_bloc.dart`, `settings_bloc.dart` |
+| 10 | `CLEANUP` | Import inutile `permission_service.dart` supprimé dans `main.dart` | `main.dart` |
+| 11 | `CLEANUP` | Variable locale `_isVirtual` renommée `isVirtual` (lint) + `prefer_conditional_assignment` | `device_discovery.dart` |
+| 12 | `CLEANUP` | Indentation incohérente dans `_handlePlayCommand` | `session_manager.dart` |
+| 13 | `CHORE` | Version sync : pubspec.yaml mis à jour (0.1.7+7 → 0.1.11+11) | `pubspec.yaml` |
+
+---
+
 ## Session du 2026-03-30 (v0.1.10)
 
 ### Contexte
@@ -177,6 +202,21 @@ _(les entrées seront ajoutées au fur et à mesure des modifications)_
 ---
 
 ## Historique Complet
+
+### 2026-03-30 (v0.1.11)
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 1 | `FIX` | File transfer : remplacé `readAsBytes()` par `openRead()` streaming → élimine OOM sur mobile | `file_transfer_service.dart` |
+| 2 | `FIX` | Compensation clock offset : limite 30s (au lieu de 5s) + cap attente si delay positif | `session_manager.dart`, `app_constants.dart` |
+| 3 | `FIX` | Logging diagnostique cache directory + slaves count | `session_manager.dart`, `file_transfer_service.dart` |
+| 4 | `FIX` | `dispose()` WebSocketServer n'attendait pas `stop()` async | `websocket_server.dart` |
+| 5 | `FIX` | `sendFile` doc corrigée (ne vérifie pas ACKs) | `file_transfer_service.dart` |
+| 6 | `FIX` | DiscoveryBloc sync complet devices (suppression disparus) | `discovery_bloc.dart` |
+| 7 | `FIX` | Port hardcodé 7890 → `kDefaultPort` | `discovery_screen.dart` |
+| 8 | `CLEANUP` | Suppression factory `hello()` morte + imports inutiles | `protocol_message.dart`, `player_bloc.dart`, `discovery_bloc.dart`, `settings_bloc.dart`, `main.dart` |
+| 9 | `CLEANUP` | Lint fixes (`_isVirtual`, `prefer_conditional_assignment`, indentation) | `device_discovery.dart`, `session_manager.dart` |
+| 10 | `CHORE` | Version sync pubspec.yaml (0.1.7+7 → 0.1.11+11) | `pubspec.yaml` |
 
 ### 2026-03-28 (v0.1.2)
 

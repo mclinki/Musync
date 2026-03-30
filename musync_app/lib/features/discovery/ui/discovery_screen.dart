@@ -56,7 +56,7 @@ class _DiscoveryView extends StatelessWidget {
                   name: 'Appareil ($ip)',
                   type: DeviceType.phone,
                   ip: ip,
-                  port: 7890,
+                  port: kDefaultPort,
                   discoveredAt: DateTime.now(),
                 );
                 context.read<DiscoveryBloc>().add(

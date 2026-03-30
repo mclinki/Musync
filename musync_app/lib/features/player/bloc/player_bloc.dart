@@ -3,7 +3,6 @@ import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:logger/logger.dart';
 import '../../../core/core.dart';
-import '../../../core/services/firebase_service.dart';
 
 // ── Events ──
 

@@ -385,9 +385,9 @@ class WebSocketServer {
     }
   }
 
-  void dispose() {
-    stop();
-    _eventController.close();
+  Future<void> dispose() async {
+    await stop();
+    await _eventController.close();
     clockSync.dispose();
   }
 }

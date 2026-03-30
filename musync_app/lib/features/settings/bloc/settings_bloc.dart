@@ -6,7 +6,6 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:logger/logger.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/core.dart';
-import '../../../core/services/firebase_service.dart';
 
 // ── Events ──
 
