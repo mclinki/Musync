@@ -215,6 +215,7 @@ enum PlayerStatus {
 
 class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
   final SessionManager sessionManager;
+  final FirebaseService _firebase;
   final Logger _logger;
   StreamSubscription? _stateSub;
   StreamSubscription? _positionSub;
@@ -222,8 +223,9 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
   StreamSubscription? _syncQualitySub;
   StreamSubscription? _fileTransferSub;
 
-  PlayerBloc({required this.sessionManager, Logger? logger})
-      : _logger = logger ?? Logger(),
+  PlayerBloc({required this.sessionManager, FirebaseService? firebase, Logger? logger})
+      : _firebase = firebase ?? FirebaseService(),
+        _logger = logger ?? Logger(),
         super(const PlayerState()) {
     on<LoadTrackRequested>(_onLoadTrack);
     on<AddToQueueRequested>(_onAddToQueue);
@@ -468,7 +470,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
       emit(state.copyWith(status: PlayerStatus.paused));
     } catch (e, stack) {
       _logger.e('Pause failed: $e');
-      FirebaseService().recordError(e, stack, reason: 'pause');
+      _firebase.recordError(e, stack, reason: 'pause');
       emit(state.copyWith(
         status: PlayerStatus.error,
         errorMessage: 'Erreur lors de la pause: $e',
@@ -489,7 +491,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
       emit(state.copyWith(status: PlayerStatus.idle, position: Duration.zero));
     } catch (e, stack) {
       _logger.e('Stop failed: $e');
-      FirebaseService().recordError(e, stack, reason: 'stop');
+      _firebase.recordError(e, stack, reason: 'stop');
       emit(state.copyWith(
         status: PlayerStatus.error,
         errorMessage: 'Erreur lors de l\'arrêt: $e',
@@ -613,7 +615,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
       emit(state.copyWith(position: event.position));
     } catch (e, stack) {
       _logger.e('Seek failed: $e');
-      FirebaseService().recordError(e, stack, reason: 'seek');
+      _firebase.recordError(e, stack, reason: 'seek');
       emit(state.copyWith(
         errorMessage: 'Erreur lors du déplacement: $e',
       ));
@@ -629,7 +631,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
       emit(state.copyWith(volume: event.volume));
     } catch (e, stack) {
       _logger.e('Set volume failed: $e');
-      FirebaseService().recordError(e, stack, reason: 'volumeChanged');
+      _firebase.recordError(e, stack, reason: 'volumeChanged');
       emit(state.copyWith(
         errorMessage: 'Erreur lors du changement de volume: $e',
       ));

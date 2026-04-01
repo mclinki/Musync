@@ -31,6 +31,10 @@ class FileTransferService {
   final StreamController<TransferProgress> _progressController = 
       StreamController.broadcast();
 
+  // Timeout timer for incomplete transfers
+  Timer? _cleanupTimer;
+  static const _transferTimeout = Duration(seconds: 30);
+
   FileTransferService({Logger? logger}) : _logger = logger ?? Logger();
 
   Stream<TransferProgress> get progressStream => _progressController.stream;
@@ -48,6 +52,36 @@ class FileTransferService {
     await musyncDir.create(recursive: true);
     _tempDir = musyncDir;
     _logger.i('File transfer cache: ${_tempDir!.path}');
+
+    // Start cleanup timer for incomplete transfers
+    _startCleanupTimer();
+  }
+
+  /// Start timer to clean up incomplete transfers.
+  void _startCleanupTimer() {
+    _cleanupTimer?.cancel();
+    _cleanupTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      _cleanupStaleTransfers();
+    });
+  }
+
+  /// Clean up transfers that have been inactive for too long.
+  void _cleanupStaleTransfers() {
+    final now = DateTime.now();
+    final staleKeys = <String>[];
+
+    for (final entry in _incomingTransfers.entries) {
+      final transfer = entry.value;
+      final elapsed = now.difference(transfer.startedAt);
+      if (elapsed > _transferTimeout) {
+        _logger.w('Cleaning up stale transfer: ${transfer.fileName} (${elapsed.inSeconds}s)');
+        staleKeys.add(entry.key);
+      }
+    }
+
+    for (final key in staleKeys) {
+      _incomingTransfers.remove(key);
+    }
   }
 
   /// Get the cache directory path.
@@ -376,6 +410,7 @@ class FileTransferService {
 
   /// Dispose resources.
   Future<void> dispose() async {
+    _cleanupTimer?.cancel();
     await _progressController.close();
   }
 }
@@ -386,13 +421,15 @@ class _IncomingTransfer {
   final int fileSize;
   final int totalChunks;
   final List<Uint8List> chunks;
+  final DateTime startedAt;
 
   _IncomingTransfer({
     required this.fileName,
     required this.fileSize,
     required this.totalChunks,
     required this.chunks,
-  });
+    DateTime? startedAt,
+  }) : startedAt = startedAt ?? DateTime.now();
 }
 
 /// Progress information for a file transfer.

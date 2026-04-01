@@ -276,17 +276,18 @@
   - Priorité : Basse
 
 ### Robustesse
-- [ ] **CONCEPTION 4** : Ajouter timeout au transfert de fichiers
+- [x] **CONCEPTION 4** : Ajouter timeout au transfert de fichiers
   - Nettoyer les transferts incomplets après X secondes
+  - ✅ **FIXÉ** : Timer cleanup 10s + timeout 30s pour transferts inactifs
   - Priorité : Moyenne
 
 - [ ] **BUG 5** : Afficher le nom de l'hôte pendant la connexion
   - `_buildJoiningView` ne montre pas à quel appareil on se connecte
   - Priorité : Basse
 
-- [ ] **SYNC 1** : Émettre SyncQualityChanged après chaque recalibration auto
+- [x] **SYNC 1** : Émettre SyncQualityChanged après chaque recalibration auto
   - Actuellement émis une seule fois après join
-  - Le clock_sync a un timer auto-calibration mais pas de callback de fin
+  - ✅ **DÉJÀ FAIT** : Timer périodique 10s appelle `_emitSyncQuality()`
   - Priorité : Moyenne
 
 - [ ] **SYNC 2** : Guest pause/resume ne propage pas à l'hôte
@@ -358,9 +359,10 @@
   - ✅ **FIXÉ** : `_interruptionSub` ajouté + handler `_handleInterruption()` (pause/resume auto)
   - 📄 Rapport : §P2-5
 
-- [ ] **QWEN-P2-1** : `FirebaseService()` instancié directement au lieu d'être injecté
+- [x] **QWEN-P2-1** : `FirebaseService()` instancié directement au lieu d'être injecté
   - 5 occurrences dans `player_bloc.dart`, `discovery_bloc.dart`, `session_manager.dart`
   - Impact : couplage fort, mocking impossible pour les tests
+  - ✅ **FIXÉ** : Injection via constructeur (paramètre optionnel `firebase`)
   - 📄 Rapport : §P2-1
 
 - [x] **QWEN-P2-2** : `analysis_options.yaml` — linter presque vide

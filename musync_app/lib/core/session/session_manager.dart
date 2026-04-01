@@ -766,7 +766,7 @@ class SessionManager {
       _logger.i('AudioTrack loaded successfully');
     } catch (e, stack) {
       _logger.e('!!! FAILED TO LOAD TRACK !!!: $e');
-      FirebaseService().recordError(e, stack, reason: 'loadPreloaded');
+      _firebase?.recordError(e, stack, reason: 'loadPreloaded');
       return;
     }
 

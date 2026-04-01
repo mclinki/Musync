@@ -332,6 +332,7 @@ enum DiscoveryStatus {
 
 class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
   final SessionManager sessionManager;
+  final FirebaseService _firebase;
   final Logger _logger;
   bool _isClosed = false;
   StreamSubscription? _devicesSub;
@@ -342,8 +343,9 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
   StreamSubscription? _syncQualitySub;
   StreamSubscription? _fileTransferSub;
 
-  DiscoveryBloc({required this.sessionManager, Logger? logger})
-      : _logger = logger ?? Logger(),
+  DiscoveryBloc({required this.sessionManager, FirebaseService? firebase, Logger? logger})
+      : _firebase = firebase ?? FirebaseService(),
+        _logger = logger ?? Logger(),
         super(const DiscoveryState()) {
     on<StartScanning>(_onStartScanning);
     on<StopScanning>(_onStopScanning);
@@ -445,7 +447,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
       await sessionManager.startScanning();
     } catch (e, stack) {
       _logger.e('Failed to start scanning: $e');
-      FirebaseService().recordError(e, stack, reason: 'startScanning');
+      _firebase.recordError(e, stack, reason: 'startScanning');
       emit(state.copyWith(
         status: DiscoveryStatus.error,
         errorMessage: 'Failed to start scanning: $e',
@@ -461,7 +463,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
       await sessionManager.stopScanning();
     } catch (e, stack) {
       _logger.e('Failed to stop scanning: $e');
-      FirebaseService().recordError(e, stack, reason: 'stopScanning');
+      _firebase.recordError(e, stack, reason: 'stopScanning');
       emit(state.copyWith(
         status: DiscoveryStatus.error,
         errorMessage: 'Failed to stop scanning: $e',
@@ -578,7 +580,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
       await sessionManager.leaveSession();
     } catch (e, stack) {
       _logger.e('Failed to leave session: $e');
-      FirebaseService().recordError(e, stack, reason: 'leaveSession');
+      _firebase.recordError(e, stack, reason: 'leaveSession');
       emit(state.copyWith(
         status: DiscoveryStatus.error,
         errorMessage: 'Failed to leave session: $e',

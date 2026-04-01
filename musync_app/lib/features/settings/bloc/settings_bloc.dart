@@ -105,14 +105,17 @@ class SettingsState extends Equatable {
 class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
   final SharedPreferences _prefs;
   final SessionManager _sessionManager;
+  final FirebaseService _firebase;
   final Logger _logger;
 
   SettingsBloc({
     required SharedPreferences prefs,
     required SessionManager sessionManager,
+    FirebaseService? firebase,
     Logger? logger,
   })  : _prefs = prefs,
         _sessionManager = sessionManager,
+        _firebase = firebase ?? _firebase,
         _logger = logger ?? Logger(),
         super(const SettingsState()) {
     on<LoadSettings>(_onLoadSettings);
@@ -146,7 +149,7 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
       ));
     } catch (e, stack) {
       _logger.e('Failed to load settings: $e');
-      FirebaseService().recordError(e, stack, reason: 'loadSettings');
+      _firebase.recordError(e, stack, reason: 'loadSettings');
       emit(state.copyWith(
         isLoading: false,
         errorMessage: 'Erreur lors du chargement des paramètres: $e',
@@ -163,7 +166,7 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
       emit(state.copyWith(themeMode: event.themeMode, clearError: true));
     } catch (e, stack) {
       _logger.e('Failed to save theme: $e');
-      FirebaseService().recordError(e, stack, reason: 'saveTheme');
+      _firebase.recordError(e, stack, reason: 'saveTheme');
       emit(state.copyWith(
         errorMessage: 'Erreur lors de la sauvegarde du thème: $e',
       ));
@@ -197,7 +200,7 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
       emit(state.copyWith(cacheSize: cacheSize, clearError: true));
     } catch (e, stack) {
       _logger.e('Failed to clear cache: $e');
-      FirebaseService().recordError(e, stack, reason: 'clearCache');
+      _firebase.recordError(e, stack, reason: 'clearCache');
       emit(state.copyWith(
         errorMessage: 'Erreur lors du nettoyage du cache: $e',
       ));
