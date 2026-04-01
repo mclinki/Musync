@@ -5,7 +5,6 @@ import 'audio_session.dart';
 /// Protocol messages exchanged between host and slaves over WebSocket.
 enum MessageType {
   // Connection
-  hello,
   join,
   welcome,
   reject,
@@ -20,13 +19,11 @@ enum MessageType {
   prepare,  // Pre-load a track for faster playback
   play,
   pause,
-  stop,
   seek,
   skipNext,
   skipPrev,
 
   // Audio streaming
-  audioChunk,
   audioReady,
 
   // File transfer
@@ -41,7 +38,6 @@ enum MessageType {
   // Session
   heartbeat,
   heartbeatAck,
-  deviceUpdate,
   error,
 }
 
@@ -67,14 +63,19 @@ class ProtocolMessage {
   }
 
   factory ProtocolMessage.decode(String data) {
-    final map = jsonDecode(data) as Map<String, dynamic>;
+    final decoded = jsonDecode(data);
+    if (decoded is! Map<String, dynamic>) {
+      return ProtocolMessage(type: MessageType.error, payload: {});
+    }
+    final map = decoded;
+    final rawPayload = map['payload'];
     return ProtocolMessage(
       type: MessageType.values.firstWhere(
         (e) => e.name == map['type'],
         orElse: () => MessageType.error,
       ),
-      payload: map['payload'] as Map<String, dynamic>? ?? {},
-      timestampMs: map['ts'] as int? ?? 0,
+      payload: rawPayload is Map ? Map<String, dynamic>.from(rawPayload) : {},
+      timestampMs: (map['ts'] as num?)?.toInt() ?? 0,
     );
   }
 

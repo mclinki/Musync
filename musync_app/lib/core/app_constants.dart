@@ -6,7 +6,7 @@ class AppConstants {
   AppConstants._(); // Prevent instantiation
 
   // ── App Info ──────────────────────────────────────────
-  static const String appVersion = '0.1.11';
+  static const String appVersion = '0.1.14';
   static const String appName = 'MusyncMIMO';
 
   // ── Network ───────────────────────────────────────────
@@ -38,8 +38,8 @@ class AppConstants {
   // ── File Transfer ─────────────────────────────────────
   static const int fileChunkSizeBytes = 64 * 1024; // 64KB
   static const int fileTransferTimeoutSeconds = 30;
-  static const int interChunkDelayMs = 5;
-  static const int interChunkDelayInterval = 5; // delay every N chunks
+  static const int interChunkDelayMs = 10; // Delay between each chunk (ms)
+  static const int interChunkDelayInterval = 1; // delay every N chunks (1 = every chunk)
 
   // ── Audio ─────────────────────────────────────────────
   static const int positionUpdateIntervalMs = 200;

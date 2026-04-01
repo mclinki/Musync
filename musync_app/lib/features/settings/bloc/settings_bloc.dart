@@ -158,8 +158,16 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     ThemeChanged event,
     Emitter<SettingsState> emit,
   ) async {
-    await _prefs.setString('theme_mode', event.themeMode.name);
-    emit(state.copyWith(themeMode: event.themeMode, clearError: true));
+    try {
+      await _prefs.setString('theme_mode', event.themeMode.name);
+      emit(state.copyWith(themeMode: event.themeMode, clearError: true));
+    } catch (e, stack) {
+      _logger.e('Failed to save theme: $e');
+      FirebaseService().recordError(e, stack, reason: 'saveTheme');
+      emit(state.copyWith(
+        errorMessage: 'Erreur lors de la sauvegarde du thème: $e',
+      ));
+    }
   }
 
   Future<void> _onDeviceNameChanged(

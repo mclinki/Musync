@@ -5,6 +5,92 @@
 
 ---
 
+## Session du 2026-04-01 (v0.1.14) — Audit Qwen3.6-Plus + fixes critiques
+
+### Contexte
+Reprise projet Musync. Audit complet par Qwen3.6-Plus : 10 problèmes identifiés (1 P0, 3 P1, 4 P2, 2 P3). Fixes appliqués pour les issues critiques et importantes. 95/95 tests passent.
+
+### Modifications
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 1 | `FIX` | P0-3 Memory leak : `FileTransferService.dispose()` ajouté dans `SessionManager.dispose()` | `session_manager.dart`, `file_transfer_service.dart` |
+| 2 | `FIX` | P0-2 Validation payloads JSON : 22 casts unsafe remplacés par validations défensives | `websocket_client.dart`, `websocket_server.dart`, `protocol_message.dart`, `audio_session.dart`, `device_info.dart` |
+| 3 | `FIX` | P1-3 Backpressure : délai entre chunks (5ms/5 chunks → 10ms/chaque chunk) | `app_constants.dart`, `file_transfer_service.dart` |
+| 4 | `FIX` | P1-5 Firebase error handlers chaînés (précédent handler préservé) | `firebase_service.dart` |
+| 5 | `FIX` | P2-2 Linter strict : 12 règles ajoutées (`prefer_const`, `unawaited_futures`, etc.) | `analysis_options.yaml` |
+| 6 | `FIX` | P2-5 Gestion interruptions audio (phone calls, alarms) | `audio_engine.dart` |
+| 7 | `CHORE` | Version sync `0.1.13+13` → `0.1.14+14` | `pubspec.yaml`, `app_constants.dart` |
+| 8 | `TEST` | Tests unitaires : 95/95 passent (zéro régression) | — |
+
+### Tâches différées (refactoring majeur)
+- P1-2 : Transfert Base64 → binaire (nécessite refactoring protocole WebSocket)
+- P1-4 : Race condition fichiers → Completer (nécessite refactoring file transfer)
+- P1-6 : mDNS publishing via package (nécessite refactoring discovery)
+
+---
+
+## Session du 2026-03-31 (v0.1.13) — Audit complet + cleanup
+
+### Contexte
+Audit complet du codebase : analyse statique, compatibilité, dead code, tests. Fix de 30+ bugs (3 Critical, 6 High, 12 Medium). Suppression dead code, amélioration tests, mise à jour SDK constraints.
+
+### Modifications
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 1 | `FIX` | ANALYZE-8 Null check `_tempDir` + safe casts payload | `file_transfer_service.dart` |
+| 2 | `FIX` | ANALYZE-9 `_performSyncExchange` cleanup complet `_syncCompleter` | `websocket_client.dart` |
+| 3 | `FIX` | ANALYZE-12 Safe casts `_handleTransferStart` + `_handleTransferChunk` | `file_transfer_service.dart` |
+| 4 | `FIX` | ANALYZE-13 Concurrent transfers : `.values.last` au lieu de `.first` | `file_transfer_service.dart` |
+| 5 | `FIX` | ANALYZE-14 Division by zero : seuil `elapsedSec > 1.0` | `clock_sync.dart` |
+| 6 | `FIX` | ANALYZE-15 RangeError substring : safe `deviceId.length > 8` | `device_discovery.dart` |
+| 7 | `FIX` | ANALYZE-16 ConcurrentModificationError : copie `[..._slaves.values]` | `websocket_server.dart` |
+| 8 | `FIX` | ANALYZE-17 Socket fermé heartbeat timeout : `slave.socket.close()` | `websocket_server.dart` |
+| 9 | `FIX` | ANALYZE-18/19 Unsafe casts `data is! String` + safe cast payload | `websocket_client.dart`, `websocket_server.dart`, `protocol_message.dart` |
+| 10 | `FIX` | ANALYZE-20 `copyWith` clear `currentTrack` : paramètre `clearTrack` | `audio_session.dart` |
+| 11 | `FIX` | ANALYZE-21 Try-catch `_onThemeChanged` + Firebase logging | `settings_bloc.dart` |
+| 12 | `FIX` | AUDIT-3 Commentaire clarifié Windows App ID placeholder | `firebase_options.dart` |
+| 13 | `FIX` | AUDIT-4 mDNS publisher skip Windows : `Platform.isWindows` | `device_discovery.dart` |
+| 14 | `FIX` | AUDIT-10 Safe casts `_handleWelcome` + `_handleSyncResponse` | `websocket_client.dart` |
+| 15 | `CLEANUP` | AUDIT-11 Suppression 4 valeurs enum inutilisées (`hello`, `stop`, `audioChunk`, `deviceUpdate`) | `protocol_message.dart` |
+| 16 | `CLEANUP` | AUDIT-13 Suppression event `ResumeRequested` + handler `_onResume` | `player_bloc.dart` |
+| 17 | `TEST` | AUDIT-15 Tests réels widget_test (AudioTrack instantiation, JSON serialization) | `widget_test.dart` |
+| 18 | `CHORE` | SDK constraint `>=3.2.0` → `>=3.6.0` (compatibilité `withValues()`) | `pubspec.yaml` |
+| 19 | `CHORE` | Version sync `0.1.12+12` → `0.1.13+13` | `pubspec.yaml`, `app_constants.dart` |
+| 20 | `TEST` | Tests unitaires : 95/95 passent (+2 nouveaux) | — |
+
+---
+
+## Session du 2026-03-31 (v0.1.12)
+
+### Contexte
+Analyse complète du codebase + fix de 12 bugs critiques/high détectés par Crashlytics et analyse statique. Tests sur émulateur Android Pixel 9.
+
+### Modifications
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 1 | `FIX` | CRASH-1 RenderFlex overflow : `Column` wrappé dans `SingleChildScrollView` | `player_screen.dart` |
+| 2 | `FIX` | CRASH-1 HomeScreen overflow : `SingleChildScrollView` + `ConstrainedBox` | `main.dart` |
+| 3 | `FIX` | CRASH-2/3 ScaffoldMessenger dans build() : déplacé dans `addPostFrameCallback` + `context.mounted` | `settings_screen.dart` |
+| 4 | `FIX` | CRASH-4 TextEditingController double-dispose : pattern `safeDispose()` avec flag `disposed` + `PopScope` | `settings_screen.dart`, `discovery_screen.dart` |
+| 5 | `FIX` | CRASH-5 SocketException Firebase init : timeout 15s + catch `errno=103` | `firebase_service.dart` |
+| 6 | `FIX` | ANALYZE-1 Stream subscription leak : `_playerStateSub` stocké/annulé + guard `_stateController.isClosed` | `audio_engine.dart` |
+| 7 | `FIX` | ANALYZE-2 BLoC fermé `add()` : flag `_isClosed` + guard dans handlers stream | `discovery_bloc.dart` |
+| 8 | `FIX` | ANALYZE-3 context.mounted manquant : check après `FilePicker.platform.pickFiles()` | `player_screen.dart` |
+| 9 | `FIX` | ANALYZE-4 Double reconnect : `_reconnectTimer?.cancel()` dans `_handleDisconnect` | `websocket_client.dart` |
+| 10 | `FIX` | ANALYZE-5 Controllers après close() : guard `_stateController.isClosed` + `_playlistUpdateController.isClosed` | `session_manager.dart` |
+| 11 | `FIX` | ANALYZE-6 Unawaited stop() : nouveau event `StopPlaybackRequested` + handler BLoC | `discovery_bloc.dart`, `discovery_screen.dart` |
+| 12 | `FIX` | ANALYZE-7 errorMessage non cleared : `errorMessage: null` sur recovery states | `discovery_bloc.dart` |
+| 13 | `FIX` | ANALYZE-10 Slave skip audio : `pause()` avant `emit(loading)` | `player_bloc.dart` |
+| 14 | `FIX` | ANALYZE-11 Retry button UX : `StartScanning` au lieu de `LeaveSessionRequested` | `discovery_screen.dart` |
+| 15 | `TEST` | Tests unitaires : 93/93 passent (zéro régression) | — |
+| 16 | `BUILD` | APK debug Android : build réussi | — |
+| 17 | `TEST` | Émulateur Pixel 9 (Android 15) : app lancée, erreurs RenderBox résiduelles | — |
+
+---
+
 ## Session du 2026-03-30 (v0.1.11)
 
 ### Contexte

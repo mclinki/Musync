@@ -59,21 +59,33 @@ class FirebaseService {
     try {
       _logger.i('Initializing Firebase...');
 
-      // 1. Core
+      // 1. Core — with timeout to avoid hanging on unstable networks
       await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform,
+      ).timeout(
+        const Duration(seconds: 15),
+        onTimeout: () {
+          _logger.w('Firebase Core init timed out');
+          throw TimeoutException('Firebase Core init timed out');
+        },
       );
       _logger.i('Firebase Core initialized');
 
       // 2. Crashlytics
       _crashlytics = FirebaseCrashlytics.instance;
 
-      // Pass all uncaught Flutter errors to Crashlytics
-      FlutterError.onError = _crashlytics!.recordFlutterFatalError;
+      // Pass all uncaught Flutter errors to Crashlytics (chain with previous handler)
+      final previousFlutterError = FlutterError.onError;
+      FlutterError.onError = (details) {
+        _crashlytics!.recordFlutterFatalError(details);
+        previousFlutterError?.call(details);
+      };
 
-      // Pass all uncaught async errors to Crashlytics
+      // Pass all uncaught async errors to Crashlytics (chain with previous handler)
+      final previousPlatformError = PlatformDispatcher.instance.onError;
       PlatformDispatcher.instance.onError = (error, stack) {
         _crashlytics!.recordError(error, stack, fatal: true);
+        previousPlatformError?.call(error, stack);
         return true;
       };
 
@@ -104,6 +116,11 @@ class FirebaseService {
       _logger.e('Firebase initialization failed: $e');
       _logger.e(stack.toString());
       // App continues without Firebase — not critical for MVP
+      // SocketException errno=103 is expected on unstable networks
+      if (e.toString().contains('errno = 103') ||
+          e.toString().contains('Software caused connection abort')) {
+        _logger.w('Network error during Firebase init — continuing without Firebase');
+      }
     }
   }
 

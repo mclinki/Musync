@@ -37,6 +37,7 @@ class AudioSession extends Equatable {
     List<DeviceInfo>? slaves,
     SessionState? state,
     AudioTrack? currentTrack,
+    bool clearTrack = false,
     DateTime? createdAt,
     DateTime? startedAt,
   }) {
@@ -45,7 +46,7 @@ class AudioSession extends Equatable {
       hostDevice: hostDevice ?? this.hostDevice,
       slaves: slaves ?? this.slaves,
       state: state ?? this.state,
-      currentTrack: currentTrack ?? this.currentTrack,
+      currentTrack: clearTrack ? null : (currentTrack ?? this.currentTrack),
       createdAt: createdAt ?? this.createdAt,
       startedAt: startedAt ?? this.startedAt,
     );
@@ -175,17 +176,17 @@ class AudioTrack extends Equatable {
 
   factory AudioTrack.fromJson(Map<String, dynamic> json) {
     return AudioTrack(
-      id: json['id'] as String,
-      title: json['title'] as String,
+      id: json['id'] as String? ?? '',
+      title: json['title'] as String? ?? 'Unknown',
       artist: json['artist'] as String?,
       album: json['album'] as String?,
-      source: json['source'] as String,
+      source: json['source'] as String? ?? '',
       sourceType: AudioSourceType.values.firstWhere(
         (e) => e.name == json['source_type'],
         orElse: () => AudioSourceType.localFile,
       ),
-      durationMs: json['duration_ms'] as int?,
-      fileSizeBytes: json['file_size_bytes'] as int?,
+      durationMs: (json['duration_ms'] as num?)?.toInt(),
+      fileSizeBytes: (json['file_size_bytes'] as num?)?.toInt(),
     );
   }
 

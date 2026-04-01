@@ -216,7 +216,11 @@ class WebSocketServer {
 
   void _handleMessage(WebSocket socket, dynamic data) {
     try {
-      final message = ProtocolMessage.decode(data as String);
+      if (data is! String) {
+        _logger.w('Received non-string message: ${data.runtimeType}');
+        return;
+      }
+      final message = ProtocolMessage.decode(data);
 
       switch (message.type) {
         case MessageType.join:
@@ -243,7 +247,11 @@ class WebSocketServer {
   }
 
   void _handleJoin(WebSocket socket, ProtocolMessage message) {
-    final deviceJson = message.payload['device'] as Map<String, dynamic>;
+    final deviceJson = message.payload['device'];
+    if (deviceJson is! Map<String, dynamic>) {
+      _logger.e('Invalid device payload in join message');
+      return;
+    }
     final device = DeviceInfo.fromJson(deviceJson);
 
     final isReconnection = _slaves.containsKey(device.id);
@@ -354,6 +362,10 @@ class WebSocketServer {
       final slave = _slaves[deviceId];
       if (slave != null) {
         _logger.w('Heartbeat timeout for ${slave.deviceName}');
+        // Close the socket before removing
+        try {
+          slave.socket.close();
+        } catch (_) {}
         _slaves.remove(deviceId);
         _eventController.add(ServerEvent(
           type: ServerEventType.deviceDisconnected,
@@ -376,7 +388,9 @@ class WebSocketServer {
   /// Broadcast a message to all connected slaves.
   Future<void> broadcast(ProtocolMessage message) async {
     final encoded = message.encode();
-    for (final slave in _slaves.values) {
+    // Create a copy to avoid ConcurrentModificationError if slaves are removed during iteration
+    final slaves = [..._slaves.values];
+    for (final slave in slaves) {
       try {
         slave.socket.add(encoded);
       } catch (e) {

@@ -70,6 +70,10 @@ class LeaveSessionRequested extends DiscoveryEvent {
   const LeaveSessionRequested();
 }
 
+class StopPlaybackRequested extends DiscoveryEvent {
+  const StopPlaybackRequested();
+}
+
 class SessionStateChanged extends DiscoveryEvent {
   final SessionManagerState state;
 
@@ -329,6 +333,7 @@ enum DiscoveryStatus {
 class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
   final SessionManager sessionManager;
   final Logger _logger;
+  bool _isClosed = false;
   StreamSubscription? _devicesSub;
   StreamSubscription? _stateSub;
   StreamSubscription? _audioStateSub;
@@ -349,6 +354,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
     on<SessionCreated>(_onSessionCreated);
     on<SessionJoined>(_onSessionJoined);
     on<LeaveSessionRequested>(_onLeaveSession);
+    on<StopPlaybackRequested>(_onStopPlayback);
     on<SessionStateChanged>(_onSessionStateChanged);
     on<PlaybackStateChanged>(_onPlaybackStateChanged);
     on<SyncQualityChanged>(_onSyncQualityChanged);
@@ -408,6 +414,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
   }
 
   void _handleAudioStateChange(AudioEngineState audioState) {
+    if (_isClosed) return;
     final isPlaying = audioState == AudioEngineState.playing;
     add(PlaybackStateChanged(
       track: sessionManager.audioEngine.currentTrack,
@@ -418,6 +425,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
   }
 
   void _handlePositionChange(Duration position) {
+    if (_isClosed) return;
     if (state.currentTrack != null) {
       add(PlaybackStateChanged(
         track: state.currentTrack,
@@ -520,6 +528,8 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
         hostPort: event.hostDevice.port,
       );
       if (success) {
+        // Stop scanning to save bandwidth once connected
+        await sessionManager.stopScanning();
         add(const SessionJoined());
       } else {
         emit(state.copyWith(
@@ -578,6 +588,17 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
     emit(const DiscoveryState());
   }
 
+  Future<void> _onStopPlayback(
+    StopPlaybackRequested event,
+    Emitter<DiscoveryState> emit,
+  ) async {
+    try {
+      await sessionManager.audioEngine.stop();
+    } catch (e) {
+      _logger.w('Error stopping playback: $e');
+    }
+  }
+
   void _onSessionStateChanged(
     SessionStateChanged event,
     Emitter<DiscoveryState> emit,
@@ -593,6 +614,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
           role: DeviceRole.host,
           connectedDeviceCount: session?.totalDevices ?? 1,
           connectionDetail: ConnectionDetail.connected,
+          errorMessage: null,
         ));
         break;
       case SessionManagerState.joined:
@@ -600,18 +622,21 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
           status: DiscoveryStatus.joined,
           role: DeviceRole.slave,
           connectionDetail: ConnectionDetail.connected,
+          errorMessage: null,
         ));
         break;
       case SessionManagerState.playing:
         emit(state.copyWith(
           isPlaying: true,
           connectionDetail: ConnectionDetail.connected,
+          errorMessage: null,
         ));
         break;
       case SessionManagerState.paused:
         emit(state.copyWith(
           isPlaying: false,
           connectionDetail: ConnectionDetail.connected,
+          errorMessage: null,
         ));
         break;
       case SessionManagerState.scanning:
@@ -684,6 +709,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
 
   @override
   Future<void> close() {
+    _isClosed = true;
     _devicesSub?.cancel();
     _stateSub?.cancel();
     _audioStateSub?.cancel();

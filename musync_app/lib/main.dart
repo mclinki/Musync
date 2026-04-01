@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 import 'package:firebase_analytics/firebase_analytics.dart';
 import 'core/core.dart';
 import 'features/discovery/ui/discovery_screen.dart';
+import 'features/player/bloc/player_bloc.dart';
 import 'features/player/ui/player_screen.dart';
 import 'features/settings/bloc/settings_bloc.dart';
 import 'features/settings/ui/settings_screen.dart';
@@ -78,11 +79,20 @@ class MusyncApp extends StatelessWidget {
         RepositoryProvider<SessionManager>.value(value: sessionManager),
         RepositoryProvider<FirebaseService>.value(value: firebaseService),
       ],
-      child: BlocProvider(
-        create: (_) => SettingsBloc(
-          prefs: prefs,
-          sessionManager: sessionManager,
-        )..add(const LoadSettings()),
+      child: MultiBlocProvider(
+        providers: [
+          BlocProvider(
+            create: (_) => SettingsBloc(
+              prefs: prefs,
+              sessionManager: sessionManager,
+            )..add(const LoadSettings()),
+          ),
+          BlocProvider(
+            create: (_) => PlayerBloc(
+              sessionManager: sessionManager,
+            ),
+          ),
+        ],
         child: BlocBuilder<SettingsBloc, SettingsState>(
           builder: (context, settingsState) {
             return MaterialApp(
@@ -176,7 +186,6 @@ class HomeScreen extends StatelessWidget {
                 width: double.infinity,
                 child: FilledButton.icon(
                   onPressed: () {
-                    // Log analytics event
                     context.read<FirebaseService>().logEvent(
                           'tap_create_group',
                         );

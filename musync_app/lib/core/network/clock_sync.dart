@@ -227,7 +227,7 @@ class ClockSyncEngine {
     final now = DateTime.now();
     if (_lastCalibration != null && _previousCalibration != null) {
       final elapsedSec = (now.millisecondsSinceEpoch - _previousCalibration!.millisecondsSinceEpoch) / 1000.0;
-      if (elapsedSec > 0) {
+      if (elapsedSec > 1.0) { // At least 1 second to avoid division by near-zero
         final offsetChange = newOffset - _previousOffset;
         // Drift in ppm (parts per million)
         _driftPpm = (offsetChange / elapsedSec) * 1000.0;

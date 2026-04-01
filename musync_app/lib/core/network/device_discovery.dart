@@ -240,6 +240,12 @@ class DeviceDiscovery {
 
   /// Start a UDP multicast socket that responds to mDNS queries for our service.
   Future<void> _startMdnsPublisher({int port = kDefaultPort}) async {
+    // Skip mDNS on Windows (reusePort not supported)
+    if (Platform.isWindows) {
+      _logger.i('mDNS publisher skipped on Windows');
+      return;
+    }
+
     try {
       // Resolve local IP for the A record before publishing
       final localIp = await getLocalIp();
@@ -323,7 +329,8 @@ class DeviceDiscovery {
   /// Build an mDNS response packet for our service.
   Uint8List _buildMdnsResponse({required int port}) {
     final serviceName = '$kMdnsServiceType.local';
-    final instanceName = '${deviceId.substring(0, 8)}.$serviceName';
+    final shortId = deviceId.length > 8 ? deviceId.substring(0, 8) : deviceId;
+    final instanceName = '$shortId.$serviceName';
     final localName = '$deviceName.local';
 
     final builder = BytesBuilder();

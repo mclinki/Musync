@@ -80,11 +80,11 @@ class DeviceInfo extends Equatable {
 
   factory DeviceInfo.fromJson(Map<String, dynamic> json) {
     return DeviceInfo(
-      id: json['id'] as String,
-      name: json['name'] as String,
+      id: json['id'] as String? ?? '',
+      name: json['name'] as String? ?? 'Unknown',
       type: DeviceType.fromString(json['type'] as String? ?? 'phone'),
-      ip: json['ip'] as String,
-      port: json['port'] as int,
+      ip: json['ip'] as String? ?? '',
+      port: (json['port'] as num?)?.toInt() ?? 0,
       appVersion: json['app_version'] as String? ?? AppConstants.appVersion,
       role: DeviceRole.fromString(json['role'] as String? ?? 'any'),
       discoveredAt: DateTime.now(),

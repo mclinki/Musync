@@ -11,12 +11,8 @@ class PlayerScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BlocProvider(
-      create: (context) => PlayerBloc(
-        sessionManager: context.read<SessionManager>(),
-      ),
-      child: const _PlayerView(),
-    );
+    // Use the existing PlayerBloc from the app level
+    return const _PlayerView();
   }
 }
 
@@ -46,7 +42,7 @@ class _PlayerView extends StatelessWidget {
       ),
       body: BlocBuilder<PlayerBloc, PlayerState>(
         builder: (context, state) {
-          return Padding(
+          return SingleChildScrollView(
             padding: const EdgeInsets.all(24),
             child: Column(
               children: [
@@ -529,6 +525,8 @@ class _FilePickerButton extends StatelessWidget {
       type: FileType.audio,
       allowMultiple: true,
     );
+
+    if (!context.mounted) return;
 
     if (result != null && result.files.isNotEmpty) {
       for (final file in result.files) {

@@ -52,10 +52,6 @@ class PauseRequested extends PlayerEvent {
   const PauseRequested();
 }
 
-class ResumeRequested extends PlayerEvent {
-  const ResumeRequested();
-}
-
 class StopRequested extends PlayerEvent {
   const StopRequested();
 }
@@ -235,7 +231,6 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     on<ClearQueueRequested>(_onClearQueue);
     on<PlayRequested>(_onPlay);
     on<PauseRequested>(_onPause);
-    on<ResumeRequested>(_onResume);
     on<StopRequested>(_onStop);
     on<SkipNextRequested>(_onSkipNext);
     on<SkipPreviousRequested>(_onSkipPrevious);
@@ -481,27 +476,6 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     }
   }
 
-  Future<void> _onResume(
-    ResumeRequested event,
-    Emitter<PlayerState> emit,
-  ) async {
-    try {
-      if (sessionManager.role == DeviceRole.host) {
-        await sessionManager.resumePlayback();
-      } else {
-        await sessionManager.audioEngine.play();
-      }
-      emit(state.copyWith(status: PlayerStatus.playing));
-    } catch (e, stack) {
-      _logger.e('Resume failed: $e');
-      FirebaseService().recordError(e, stack, reason: 'resume');
-      emit(state.copyWith(
-        status: PlayerStatus.error,
-        errorMessage: 'Erreur lors de la reprise: $e',
-      ));
-    }
-  }
-
   Future<void> _onStop(
     StopRequested event,
     Emitter<PlayerState> emit,
@@ -535,9 +509,12 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
 
     final nextTrack = nextPlaylist.currentTrack!;
 
-    // Guest mode: only set loading, wait for host's playCommand to update track
+    // Guest mode: pause current audio and set loading, wait for host's playCommand
     if (sessionManager.role == DeviceRole.slave) {
       _logger.i('Guest skip next: waiting for host play command');
+      try {
+        await sessionManager.audioEngine.pause();
+      } catch (_) {}
       emit(state.copyWith(status: PlayerStatus.loading));
       return;
     }
@@ -590,9 +567,12 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
 
     final prevTrack = prevPlaylist.currentTrack!;
 
-    // Guest mode: only set loading, wait for host's playCommand to update track
+    // Guest mode: pause current audio and set loading, wait for host's playCommand
     if (sessionManager.role == DeviceRole.slave) {
       _logger.i('Guest skip prev: waiting for host play command');
+      try {
+        await sessionManager.audioEngine.pause();
+      } catch (_) {}
       emit(state.copyWith(status: PlayerStatus.loading));
       return;
     }

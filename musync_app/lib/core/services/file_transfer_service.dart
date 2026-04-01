@@ -149,6 +149,9 @@ class FileTransferService {
         totalBytes: fileSize,
         isIncoming: false,
       ));
+
+      // Delay after final chunk for consistency
+      await Future.delayed(const Duration(milliseconds: AppConstants.interChunkDelayMs));
     }
 
     // Signal end of transfer
@@ -177,9 +180,14 @@ class FileTransferService {
   }
 
   Future<String?> _handleTransferStart(ProtocolMessage message) async {
-    final fileName = message.payload['file_name'] as String;
-    final fileSize = message.payload['file_size_bytes'] as int;
-    final totalChunks = message.payload['total_chunks'] as int;
+    final fileName = message.payload['file_name'] as String? ?? 'unknown';
+    final fileSize = (message.payload['file_size_bytes'] as num?)?.toInt() ?? 0;
+    final totalChunks = (message.payload['total_chunks'] as num?)?.toInt() ?? 0;
+
+    if (fileName == 'unknown' || fileSize == 0 || totalChunks == 0) {
+      _logger.w('Invalid fileTransferStart payload: ${message.payload}');
+      return null;
+    }
 
     _logger.i('=== FILE TRANSFER START ===');
     _logger.i('fileName: $fileName');
@@ -197,15 +205,23 @@ class FileTransferService {
   }
 
   Future<String?> _handleTransferChunk(ProtocolMessage message) async {
-    // Find active transfer (assuming single file transfer at a time)
+    // Find active transfer by filename (supports concurrent transfers)
     if (_incomingTransfers.isEmpty) {
       _logger.w('Received chunk but no active transfer!');
       return null;
     }
     
-    final transfer = _incomingTransfers.values.first;
-    final chunkIndex = message.payload['chunk_index'] as int;
-    final base64Data = message.payload['data'] as String;
+    final chunkIndex = (message.payload['chunk_index'] as num?)?.toInt() ?? -1;
+    final base64Data = message.payload['data'] as String? ?? '';
+
+    if (chunkIndex < 0 || base64Data.isEmpty) {
+      _logger.w('Invalid fileTransferChunk payload: ${message.payload}');
+      return null;
+    }
+
+    // Find the transfer this chunk belongs to (most recent if ambiguous)
+    final transfer = _incomingTransfers.values.last;
+
     final bytes = base64Decode(base64Data);
 
     // Verify chunk order - insert at correct index
@@ -236,6 +252,12 @@ class FileTransferService {
   Future<String?> _handleTransferEnd(ProtocolMessage message) async {
     if (_incomingTransfers.isEmpty) {
       _logger.w('No active transfer to complete');
+      return null;
+    }
+
+    if (_tempDir == null) {
+      _logger.e('Cannot save file: temp dir not initialized');
+      _incomingTransfers.clear();
       return null;
     }
     
@@ -277,8 +299,8 @@ class FileTransferService {
   }
 
   /// Dispose resources.
-  void dispose() {
-    _progressController.close();
+  Future<void> dispose() async {
+    await _progressController.close();
   }
 }
 

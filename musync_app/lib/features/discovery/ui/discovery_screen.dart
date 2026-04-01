@@ -24,6 +24,14 @@ class _DiscoveryView extends StatelessWidget {
 
   void _showManualIpDialog(BuildContext context) {
     final controller = TextEditingController();
+    var disposed = false;
+    void safeDispose() {
+      if (!disposed) {
+        disposed = true;
+        controller.dispose();
+      }
+    }
+
     showDialog(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -41,7 +49,7 @@ class _DiscoveryView extends StatelessWidget {
           TextButton(
             onPressed: () {
               Navigator.pop(dialogContext);
-              controller.dispose();
+              safeDispose();
             },
             child: const Text('Annuler'),
           ),
@@ -50,7 +58,7 @@ class _DiscoveryView extends StatelessWidget {
               final ip = controller.text.trim();
               if (ip.isNotEmpty) {
                 Navigator.pop(dialogContext);
-                controller.dispose();
+                safeDispose();
                 final device = DeviceInfo(
                   id: ip,
                   name: 'Appareil ($ip)',
@@ -68,7 +76,7 @@ class _DiscoveryView extends StatelessWidget {
           ),
         ],
       ),
-    );
+    ).then((_) => safeDispose());
   }
 
   @override
@@ -399,7 +407,7 @@ class _DiscoveryView extends StatelessWidget {
                   duration: duration,
                   isPlaying: isPlaying,
                   onStop: () {
-                    sessionManager.audioEngine.stop();
+                    context.read<DiscoveryBloc>().add(const StopPlaybackRequested());
                   },
                 )
               else if (hasTrack)
@@ -489,7 +497,7 @@ class _DiscoveryView extends StatelessWidget {
           FilledButton.icon(
             onPressed: () {
               context.read<DiscoveryBloc>().add(
-                    const LeaveSessionRequested(),
+                    const StartScanning(),
                   );
             },
             icon: const Icon(Icons.refresh),

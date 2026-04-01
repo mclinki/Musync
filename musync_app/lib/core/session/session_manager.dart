@@ -248,6 +248,9 @@ class SessionManager {
       _logger.w('Clock sync failed, continuing anyway');
     }
 
+    // Start auto-calibration to keep clocks in sync
+    _client!.clockSync.startAutoCalibration();
+
     // Emit sync quality
     _emitSyncQuality();
 
@@ -278,6 +281,9 @@ class SessionManager {
   Future<void> playTrack(AudioTrack track, {int delayMs = AppConstants.defaultPlayDelayMs, Playlist? playlist}) async {
     if (_role != DeviceRole.host) {
       throw Exception('Only the host can start playback');
+    }
+    if (_server == null) {
+      throw Exception('Server not initialized');
     }
 
     _logger.i('=== HOST PLAY TRACK ===');
@@ -369,6 +375,9 @@ class SessionManager {
     if (_role != DeviceRole.host) {
       throw Exception('Only the host can control playback');
     }
+    if (_server == null) {
+      throw Exception('Server not initialized');
+    }
 
     final positionMs = _audioEngine.position.inMilliseconds;
 
@@ -383,6 +392,9 @@ class SessionManager {
   Future<void> resumePlayback({int delayMs = AppConstants.resumeDelayMs}) async {
     if (_role != DeviceRole.host) {
       throw Exception('Only the host can control playback');
+    }
+    if (_server == null) {
+      throw Exception('Server not initialized');
     }
 
     final track = _currentSession?.currentTrack;
@@ -503,6 +515,7 @@ class SessionManager {
     await leaveSession();
     await _discovery.dispose();
     await _audioEngine.dispose();
+    await _fileTransfer.dispose();
     await _stateController.close();
     await _devicesController.close();
     await _playlistUpdateController.close();
@@ -839,14 +852,18 @@ class SessionManager {
   void _handlePlaylistUpdateCommand(ClientEvent event) {
     if (event.playlistTracks == null) return;
     _logger.i('Received playlist update: ${event.playlistTracks!.length} tracks');
-    _playlistUpdateController.add(PlaylistUpdate(
-      tracks: event.playlistTracks!,
-      currentIndex: event.playlistCurrentIndex ?? 0,
-    ));
+    if (!_playlistUpdateController.isClosed) {
+      _playlistUpdateController.add(PlaylistUpdate(
+        tracks: event.playlistTracks!,
+        currentIndex: event.playlistCurrentIndex ?? 0,
+      ));
+    }
   }
 
   void _emitState(SessionManagerState state) {
-    _stateController.add(state);
+    if (!_stateController.isClosed) {
+      _stateController.add(state);
+    }
   }
 
   void _emitSyncQuality() {

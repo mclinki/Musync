@@ -90,6 +90,9 @@ class WebSocketClient {
     _reconnectTimer?.cancel();
     _isReconnecting = false;
 
+    // Stop auto-calibration
+    clockSync.stopAutoCalibration();
+
     if (_socket != null && _isConnected) {
       try {
         final disconnectMsg = ProtocolMessage(type: MessageType.disconnect);
@@ -251,9 +254,12 @@ class WebSocketClient {
       throw Exception('Not connected');
     }
 
-    // Cancel any previous pending sync
-    if (_syncCompleter != null && !_syncCompleter!.isCompleted) {
-      _syncCompleter!.completeError(TimeoutException('Superseded by new sync'));
+    // Clean up any previous pending sync
+    if (_syncCompleter != null) {
+      if (!_syncCompleter!.isCompleted) {
+        _syncCompleter!.completeError(TimeoutException('Superseded by new sync'));
+      }
+      _syncCompleter = null;
     }
 
     _syncT1 = DateTime.now().millisecondsSinceEpoch;
@@ -274,7 +280,11 @@ class WebSocketClient {
 
   void _handleMessage(dynamic data) {
     try {
-      final message = ProtocolMessage.decode(data as String);
+      if (data is! String) {
+        _logger.w('Received non-string message: ${data.runtimeType}');
+        return;
+      }
+      final message = ProtocolMessage.decode(data);
 
       switch (message.type) {
         case MessageType.welcome:
@@ -334,7 +344,7 @@ class WebSocketClient {
   }
 
   void _handleWelcome(ProtocolMessage message) {
-    _sessionId = message.payload['session_id'] as String;
+    _sessionId = message.payload['session_id'] as String? ?? '';
     _logger.i('Joined session: $_sessionId');
 
     // Start heartbeat
@@ -375,9 +385,14 @@ class WebSocketClient {
       return;
     }
 
+    if (_syncT1 == null) {
+      _logger.w('Received syncResponse but _syncT1 is null');
+      return;
+    }
+
     final t1 = _syncT1!;
-    final t2 = message.payload['t2'] as int;
-    final t3 = message.payload['t3'] as int;
+    final t2 = (message.payload['t2'] as num?)?.toInt() ?? 0;
+    final t3 = (message.payload['t3'] as num?)?.toInt() ?? 0;
     final t4 = DateTime.now().millisecondsSinceEpoch;
 
     _syncCompleter!.complete(ClockSample(t1, t2, t3, t4));
@@ -386,14 +401,14 @@ class WebSocketClient {
   }
 
   void _handleClockAdjust(ProtocolMessage message) {
-    final offsetMs = (message.payload['offset_ms'] as num).toDouble();
-    final driftPpm = (message.payload['drift_ppm'] as num).toDouble();
+    final offsetMs = (message.payload['offset_ms'] as num?)?.toDouble() ?? 0.0;
+    final driftPpm = (message.payload['drift_ppm'] as num?)?.toDouble() ?? 0.0;
     _logger.d('Clock adjust: offset=$offsetMs, drift=$driftPpm');
   }
 
   void _handlePrepare(ProtocolMessage message) {
-    final trackSource = message.payload['track_source'] as String;
-    final sourceTypeStr = message.payload['source_type'] as String;
+    final trackSource = message.payload['track_source'] as String? ?? '';
+    final sourceTypeStr = message.payload['source_type'] as String? ?? 'localFile';
 
     final sourceType = AudioSourceType.values.firstWhere(
       (e) => e.name == sourceTypeStr,
@@ -410,10 +425,10 @@ class WebSocketClient {
   }
 
   void _handlePlay(ProtocolMessage message) {
-    final startAtMs = message.payload['start_at_ms'] as int;
-    final trackSource = message.payload['track_source'] as String;
-    final sourceTypeStr = message.payload['source_type'] as String;
-    final seekPositionMs = message.payload['seek_position_ms'] as int? ?? 0;
+    final startAtMs = (message.payload['start_at_ms'] as num?)?.toInt() ?? 0;
+    final trackSource = message.payload['track_source'] as String? ?? '';
+    final sourceTypeStr = message.payload['source_type'] as String? ?? 'localFile';
+    final seekPositionMs = (message.payload['seek_position_ms'] as num?)?.toInt() ?? 0;
 
     final sourceType = AudioSourceType.values.firstWhere(
       (e) => e.name == sourceTypeStr,
@@ -442,7 +457,7 @@ class WebSocketClient {
   }
 
   void _handleSeek(ProtocolMessage message) {
-    final positionMs = message.payload['position_ms'] as int;
+    final positionMs = (message.payload['position_ms'] as num?)?.toInt() ?? 0;
     _logger.i('Received seek command to $positionMs');
 
     _eventController.add(ClientEvent(
@@ -466,10 +481,14 @@ class WebSocketClient {
   }
 
   void _handlePlaylistUpdate(ProtocolMessage message) {
-    final tracks = (message.payload['tracks'] as List<dynamic>)
-        .map((t) => Map<String, dynamic>.from(t as Map))
-        .toList();
-    final currentIndex = message.payload['current_index'] as int;
+    final tracksRaw = message.payload['tracks'];
+    final tracks = tracksRaw is List
+        ? tracksRaw
+            .whereType<Map>()
+            .map((t) => Map<String, dynamic>.from(t))
+            .toList()
+        : <Map<String, dynamic>>[];
+    final currentIndex = (message.payload['current_index'] as num?)?.toInt() ?? 0;
     _logger.i('Received playlist update: ${tracks.length} tracks, index=$currentIndex');
 
     _eventController.add(ClientEvent(
@@ -497,6 +516,7 @@ class WebSocketClient {
     _logger.i('Disconnected from host');
     _isConnected = false;
     _heartbeatTimer?.cancel();
+    _reconnectTimer?.cancel();
 
     if (!_userDisconnected) {
       _logger.w('Unexpected disconnect, will attempt reconnect');

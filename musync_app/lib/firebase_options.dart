@@ -28,8 +28,8 @@ class DefaultFirebaseOptions {
     storageBucket: 'musync-6e5aa.firebasestorage.app',
   );
 
-  // TODO: Replace with real Windows app ID from Firebase Console
-  // Project Settings > General > Add app > Windows
+  // Windows placeholder — Firebase is skipped on Windows (see firebase_service.dart)
+  // To enable Firebase on Windows, replace with real app ID from Firebase Console
   static const FirebaseOptions windows = FirebaseOptions(
     apiKey: 'AIzaSyCt8pJsHrkKt9IMC0egWrHLDCcfj9bUip8',
     appId: '1:545311301769:windows:PLACEHOLDER_REPLACE_ME',

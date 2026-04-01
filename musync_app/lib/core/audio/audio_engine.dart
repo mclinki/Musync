@@ -30,9 +30,14 @@ class AudioEngine {
   AudioEngineState _state = AudioEngineState.idle;
   AudioTrack? _currentTrack;
   Timer? _positionTimer;
+  StreamSubscription? _playerStateSub;
+  StreamSubscription? _interruptionSub;
 
   // Pre-loaded audio source for faster playback
   ja.AudioSource? _preloadedSource;
+
+  // Track if we were playing before an interruption
+  bool _wasPlayingBeforeInterruption = false;
 
   AudioEngine({Logger? logger})
       : _logger = logger ?? Logger(),
@@ -67,13 +72,20 @@ class AudioEngine {
         androidWillPauseWhenDucked: false,
       ));
 
-      _player.playerStateStream.listen((playerState) {
+      _playerStateSub = _player.playerStateStream.listen((playerState) {
         final newState = _mapPlayerState(playerState);
         if (newState != _state) {
           _state = newState;
-          _stateController.add(_state);
+          if (!_stateController.isClosed) {
+            _stateController.add(_state);
+          }
           _logger.d('Audio state: $_state');
         }
+      });
+
+      // Listen to audio interruptions (phone calls, alarms, etc.)
+      _interruptionSub = _audioSession!.interruptionEventStream.listen((event) {
+        _handleInterruption(event);
       });
 
       _positionTimer = Timer.periodic(
@@ -194,6 +206,8 @@ class AudioEngine {
   /// Dispose resources.
   Future<void> dispose() async {
     _positionTimer?.cancel();
+    await _playerStateSub?.cancel();
+    await _interruptionSub?.cancel();
     await _player.dispose();
     await _stateController.close();
     await _positionController.close();
@@ -201,6 +215,35 @@ class AudioEngine {
   }
 
   // ── Internal ──
+
+  /// Handle audio interruptions (phone calls, alarms, etc.).
+  void _handleInterruption(asession.AudioInterruptionEvent event) {
+    if (event.begin) {
+      // Interruption started
+      _logger.i('Audio interruption began: ${event.type}');
+      _wasPlayingBeforeInterruption = _player.playing;
+      
+      if (event.type == asession.AudioInterruptionType.pause ||
+          event.type == asession.AudioInterruptionType.unknown) {
+        // Pause playback for pause-type interruptions
+        _player.pause();
+        _logger.d('Paused due to interruption');
+      }
+      // For duck-type interruptions, we could reduce volume instead
+    } else {
+      // Interruption ended
+      _logger.i('Audio interruption ended: ${event.type}');
+      
+      if (event.type == asession.AudioInterruptionType.pause ||
+          event.type == asession.AudioInterruptionType.unknown) {
+        // Resume if we were playing before the interruption
+        if (_wasPlayingBeforeInterruption) {
+          _player.play();
+          _logger.d('Resumed after interruption');
+        }
+      }
+    }
+  }
 
   AudioEngineState _mapPlayerState(ja.PlayerState playerState) {
     if (playerState.processingState == ja.ProcessingState.loading ||
@@ -219,7 +262,9 @@ class AudioEngine {
   void _setState(AudioEngineState newState) {
     if (newState != _state) {
       _state = newState;
-      _stateController.add(_state);
+      if (!_stateController.isClosed) {
+        _stateController.add(_state);
+      }
     }
   }
 }

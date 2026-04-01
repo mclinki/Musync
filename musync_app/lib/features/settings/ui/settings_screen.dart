@@ -29,9 +29,13 @@ class _SettingsView extends StatelessWidget {
           }
 
           if (state.errorMessage != null) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(state.errorMessage!)),
-            );
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(state.errorMessage!)),
+                );
+              }
+            });
           }
 
           return ListView(
@@ -202,11 +206,19 @@ class _SettingsView extends StatelessWidget {
       context: context,
       builder: (dialogContext) {
         final controller = TextEditingController(text: currentName);
+        var disposed = false;
+        void safeDispose() {
+          if (!disposed) {
+            disposed = true;
+            controller.dispose();
+          }
+        }
+
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return PopScope(
               onPopInvokedWithResult: (didPop, result) {
-                controller.dispose();
+                safeDispose();
               },
               child: AlertDialog(
                 title: const Text('Nom de l\'appareil'),
@@ -221,8 +233,8 @@ class _SettingsView extends StatelessWidget {
                 actions: [
                   TextButton(
                     onPressed: () {
-                      controller.dispose();
                       Navigator.pop(dialogContext);
+                      safeDispose();
                     },
                     child: const Text('Annuler'),
                   ),
@@ -234,8 +246,8 @@ class _SettingsView extends StatelessWidget {
                             .read<SettingsBloc>()
                             .add(DeviceNameChanged(name));
                       }
-                      controller.dispose();
                       Navigator.pop(dialogContext);
+                      safeDispose();
                     },
                     child: const Text('Enregistrer'),
                   ),
@@ -264,9 +276,14 @@ class _SettingsView extends StatelessWidget {
             onPressed: () {
               context.read<SettingsBloc>().add(const CacheCleared());
               Navigator.pop(dialogContext);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Cache vidé')),
-              );
+              // Use addPostFrameCallback to avoid showing snackbar during build
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Cache vidé')),
+                  );
+                }
+              });
             },
             child: const Text('Vider'),
           ),
