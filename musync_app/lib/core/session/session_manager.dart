@@ -10,6 +10,7 @@ import '../audio/audio_engine.dart';
 import '../services/file_transfer_service.dart';
 import '../services/foreground_service.dart';
 import '../services/firebase_service.dart';
+import '../utils/format.dart';
 
 /// High-level session manager that orchestrates all components.
 ///
@@ -48,6 +49,8 @@ class SessionManager {
   final StreamController<PlaylistUpdate> _playlistUpdateController =
       StreamController.broadcast();
   final StreamController<SyncQualityUpdate> _syncQualityController =
+      StreamController.broadcast();
+  final StreamController<ApkTransferOffer> _apkTransferOfferController =
       StreamController.broadcast();
 
   // Subscriptions
@@ -106,6 +109,10 @@ class SessionManager {
   /// Stream of sync quality updates (for slave-side UI).
   Stream<SyncQualityUpdate> get syncQualityStream =>
       _syncQualityController.stream;
+
+  /// Stream of APK transfer offers (for slave-side UI).
+  Stream<ApkTransferOffer> get apkTransferOfferStream =>
+      _apkTransferOfferController.stream;
 
   /// Discovered devices.
   Map<String, DeviceInfo> get discoveredDevices => _discovery.discoveredDevices;
@@ -505,6 +512,24 @@ class SessionManager {
     await _discovery.stopScanning();
   }
 
+  /// Broadcast a message to all connected slaves (host only).
+  Future<void> broadcast(ProtocolMessage message) async {
+    if (_server == null) {
+      _logger.w('Cannot broadcast: not hosting');
+      return;
+    }
+    await _server!.broadcast(message);
+  }
+
+  /// Send a message to a specific slave (host only).
+  Future<void> sendToSlave(String deviceId, ProtocolMessage message) async {
+    if (_server == null) {
+      _logger.w('Cannot send to slave: not hosting');
+      return;
+    }
+    await _server!.sendToSlave(deviceId, message);
+  }
+
   /// Dispose all resources.
   Future<void> dispose() async {
     for (final sub in _subscriptions) {
@@ -520,6 +545,7 @@ class SessionManager {
     await _devicesController.close();
     await _playlistUpdateController.close();
     await _syncQualityController.close();
+    await _apkTransferOfferController.close();
   }
 
   // ── Event Handlers ──
@@ -607,6 +633,9 @@ class SessionManager {
         break;
       case ClientEventType.fileTransferBinary:
         _handleFileTransferBinary(event);
+        break;
+      case ClientEventType.apkTransferOffer:
+        _handleApkTransferOffer(event);
         break;
       case ClientEventType.disconnected:
         _logger.i('Disconnected from host');
@@ -891,6 +920,50 @@ class SessionManager {
     }
   }
 
+  Future<void> _handleApkTransferOffer(ClientEvent event) async {
+    if (event.protocolMessage == null) {
+      _logger.w('Received APK transfer offer with null protocolMessage');
+      return;
+    }
+
+    final version = event.protocolMessage!.payload['version'] as String? ?? '';
+    final fileSizeBytes = (event.protocolMessage!.payload['file_size_bytes'] as num?)?.toInt() ?? 0;
+
+    _logger.i('=== APK TRANSFER OFFER RECEIVED ===');
+    _logger.i('Version: $version');
+    _logger.i('Size: ${formatBytes(fileSizeBytes)}');
+
+    // Emit event for UI to handle (show dialog to accept/decline)
+    _apkTransferOfferController.add(ApkTransferOffer(
+      version: version,
+      fileSizeBytes: fileSizeBytes,
+    ));
+  }
+
+  /// Accept APK transfer from host.
+  Future<void> acceptApkTransfer() async {
+    if (_client == null) {
+      _logger.w('Cannot accept APK transfer: not connected');
+      return;
+    }
+
+    _logger.i('Accepting APK transfer');
+    final acceptMsg = ProtocolMessage.apkTransferAccept();
+    _client!.sendMessage(acceptMsg);
+  }
+
+  /// Decline APK transfer from host.
+  Future<void> declineApkTransfer({String? reason}) async {
+    if (_client == null) {
+      _logger.w('Cannot decline APK transfer: not connected');
+      return;
+    }
+
+    _logger.i('Declining APK transfer: ${reason ?? "user declined"}');
+    final declineMsg = ProtocolMessage.apkTransferDecline(reason: reason);
+    _client!.sendMessage(declineMsg);
+  }
+
   Future<void> _handlePauseCommand(ClientEvent event) async {
     await _audioEngine.pause();
     _emitState(SessionManagerState.paused);
@@ -973,5 +1046,16 @@ class SyncQualityUpdate {
     required this.jitterMs,
     required this.isCalibrated,
     required this.qualityLabel,
+  });
+}
+
+/// APK transfer offer received from the host.
+class ApkTransferOffer {
+  final String version;
+  final int fileSizeBytes;
+
+  const ApkTransferOffer({
+    required this.version,
+    required this.fileSizeBytes,
   });
 }

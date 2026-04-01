@@ -39,6 +39,11 @@ enum MessageType {
   heartbeat,
   heartbeatAck,
   error,
+
+  // APK transfer
+  apkTransferOffer,   // Host offers to send APK (with version info)
+  apkTransferAccept,  // Slave accepts APK transfer
+  apkTransferDecline, // Slave declines APK transfer
 }
 
 /// A message in the MusyncMIMO protocol.
@@ -267,5 +272,32 @@ class ProtocolMessage {
 
   factory ProtocolMessage.fileTransferAck() {
     return ProtocolMessage(type: MessageType.fileTransferAck);
+  }
+
+  // APK transfer messages
+  factory ProtocolMessage.apkTransferOffer({
+    required String version,
+    required int fileSizeBytes,
+  }) {
+    return ProtocolMessage(
+      type: MessageType.apkTransferOffer,
+      payload: {
+        'version': version,
+        'file_size_bytes': fileSizeBytes,
+      },
+    );
+  }
+
+  factory ProtocolMessage.apkTransferAccept() {
+    return ProtocolMessage(type: MessageType.apkTransferAccept);
+  }
+
+  factory ProtocolMessage.apkTransferDecline({String? reason}) {
+    return ProtocolMessage(
+      type: MessageType.apkTransferDecline,
+      payload: {
+        'reason': reason ?? 'Declined by user',
+      },
+    );
   }
 }

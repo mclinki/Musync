@@ -70,6 +70,9 @@ void main() {
     when(() => sessionManager.syncQualityStream).thenAnswer(
       (_) => Stream<SyncQualityUpdate>.fromIterable([]),
     );
+    when(() => sessionManager.apkTransferOfferStream).thenAnswer(
+      (_) => Stream<ApkTransferOffer>.fromIterable([]),
+    );
 
     // Stub audio engine streams
     when(() => audioEngine.stateStream).thenAnswer(

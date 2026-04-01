@@ -139,6 +139,27 @@ class _DevicesSynced extends DiscoveryEvent {
   List<Object?> get props => [devices];
 }
 
+class ApkTransferOfferReceived extends DiscoveryEvent {
+  final String version;
+  final int fileSizeBytes;
+
+  const ApkTransferOfferReceived({
+    required this.version,
+    required this.fileSizeBytes,
+  });
+
+  @override
+  List<Object?> get props => [version, fileSizeBytes];
+}
+
+class ApkTransferAccepted extends DiscoveryEvent {
+  const ApkTransferAccepted();
+}
+
+class ApkTransferDeclined extends DiscoveryEvent {
+  const ApkTransferDeclined();
+}
+
 // ── State ──
 
 class DiscoveryState extends Equatable {
@@ -165,6 +186,8 @@ class DiscoveryState extends Equatable {
   // Playlist from host (for slave view)
   final List<Map<String, dynamic>> playlistTracks;
   final int playlistCurrentIndex;
+  // APK transfer offer (for slave view)
+  final ApkTransferOffer? apkTransferOffer;
 
   const DiscoveryState({
     this.status = DiscoveryStatus.idle,
@@ -184,6 +207,7 @@ class DiscoveryState extends Equatable {
     this.connectionDetail = ConnectionDetail.idle,
     this.playlistTracks = const [],
     this.playlistCurrentIndex = 0,
+    this.apkTransferOffer,
   });
 
   DiscoveryState copyWith({
@@ -206,6 +230,8 @@ class DiscoveryState extends Equatable {
     ConnectionDetail? connectionDetail,
     List<Map<String, dynamic>>? playlistTracks,
     int? playlistCurrentIndex,
+    ApkTransferOffer? apkTransferOffer,
+    bool clearApkTransferOffer = false,
   }) {
     return DiscoveryState(
       status: status ?? this.status,
@@ -227,6 +253,9 @@ class DiscoveryState extends Equatable {
       connectionDetail: connectionDetail ?? this.connectionDetail,
       playlistTracks: playlistTracks ?? this.playlistTracks,
       playlistCurrentIndex: playlistCurrentIndex ?? this.playlistCurrentIndex,
+      apkTransferOffer: clearApkTransferOffer
+          ? null
+          : (apkTransferOffer ?? this.apkTransferOffer),
     );
   }
 
@@ -249,6 +278,7 @@ class DiscoveryState extends Equatable {
         connectionDetail,
         playlistTracks,
         playlistCurrentIndex,
+        apkTransferOffer,
       ];
 }
 
@@ -342,6 +372,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
   StreamSubscription? _playlistSub;
   StreamSubscription? _syncQualitySub;
   StreamSubscription? _fileTransferSub;
+  StreamSubscription? _apkTransferSub;
 
   DiscoveryBloc({required this.sessionManager, FirebaseService? firebase, Logger? logger})
       : _firebase = firebase ?? FirebaseService(),
@@ -363,6 +394,9 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
     on<FileTransferProgressChanged>(_onFileTransferProgressChanged);
     on<PlaylistUpdated>(_onPlaylistUpdated);
     on<_DevicesSynced>(_onDevicesSynced);
+    on<ApkTransferOfferReceived>(_onApkTransferOfferReceived);
+    on<ApkTransferAccepted>(_onApkTransferAccepted);
+    on<ApkTransferDeclined>(_onApkTransferDeclined);
 
     // Listen to session manager
     _devicesSub = sessionManager.devicesStream.listen((devices) {
@@ -412,6 +446,14 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
     // Listen to file transfer progress
     _fileTransferSub = sessionManager.fileTransfer.progressStream.listen((progress) {
       add(FileTransferProgressChanged(progress.percentage));
+    });
+
+    // Listen to APK transfer offers
+    _apkTransferSub = sessionManager.apkTransferOfferStream.listen((offer) {
+      add(ApkTransferOfferReceived(
+        version: offer.version,
+        fileSizeBytes: offer.fileSizeBytes,
+      ));
     });
   }
 
@@ -709,6 +751,37 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
     emit(state.copyWith(availableDevices: event.devices));
   }
 
+  void _onApkTransferOfferReceived(
+    ApkTransferOfferReceived event,
+    Emitter<DiscoveryState> emit,
+  ) {
+    _logger.i('APK transfer offer received: version=${event.version}, size=${event.fileSizeBytes}');
+    emit(state.copyWith(
+      apkTransferOffer: ApkTransferOffer(
+        version: event.version,
+        fileSizeBytes: event.fileSizeBytes,
+      ),
+    ));
+  }
+
+  void _onApkTransferAccepted(
+    ApkTransferAccepted event,
+    Emitter<DiscoveryState> emit,
+  ) {
+    _logger.i('APK transfer accepted');
+    sessionManager.acceptApkTransfer();
+    emit(state.copyWith(clearApkTransferOffer: true));
+  }
+
+  void _onApkTransferDeclined(
+    ApkTransferDeclined event,
+    Emitter<DiscoveryState> emit,
+  ) {
+    _logger.i('APK transfer declined');
+    sessionManager.declineApkTransfer(reason: 'User declined');
+    emit(state.copyWith(clearApkTransferOffer: true));
+  }
+
   @override
   Future<void> close() {
     _isClosed = true;
@@ -719,6 +792,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
     _playlistSub?.cancel();
     _syncQualitySub?.cancel();
     _fileTransferSub?.cancel();
+    _apkTransferSub?.cancel();
     return super.close();
   }
 }

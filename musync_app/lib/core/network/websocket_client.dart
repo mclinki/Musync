@@ -333,6 +333,13 @@ class WebSocketClient {
               protocolMessage: message,
             ));
             break;
+          case MessageType.apkTransferOffer:
+            // APK transfer offer from host
+            _eventController.add(ClientEvent(
+              type: ClientEventType.apkTransferOffer,
+              protocolMessage: message,
+            ));
+            break;
           default:
             _logger.d('Unhandled message type: ${message.type}');
         }
@@ -571,6 +578,7 @@ enum ClientEventType {
   playlistUpdateCommand,
   fileTransferMessage,
   fileTransferBinary,
+  apkTransferOffer,
   error,
 }
 

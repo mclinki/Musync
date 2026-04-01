@@ -285,6 +285,28 @@
   - `_buildJoiningView` ne montre pas à quel appareil on se connecte
   - Priorité : Basse
 
+- [ ] **BUG 6** : Nom personnalisé de l'appareil non propagé lors de la découverte
+  - Le nom modifié dans les paramètres est bien sauvegardé localement
+  - Mais quand l'appareil passe en mode hôte, les autres appareils voient le nom système (pas le nom personnalisé)
+  - Cause probable : le mDNS broadcast ou le message de bienvenue utilise le nom device par défaut au lieu du nom custom des paramètres
+  - Fichiers suspects : `device_discovery.dart`, `websocket_server.dart`, `settings_bloc.dart`
+  - Priorité : Moyenne (UX — les utilisateurs ne reconnaissent pas leurs appareils)
+
+- [ ] **BUG 7** : Premier play ne fonctionne pas — nécessite un stop puis play
+  - Quand un morceau est chargé pour la première fois, appuyer sur play ne déclenche rien
+  - Il faut appuyer sur stop pour que le morceau se "charge" vraiment, puis rappuyer sur play
+  - Cause probable : l'audio n'est pas préparé (preload/prepare) avant le premier play, ou l'état du player n'est pas synchronisé avec l'UI
+  - Fichiers suspects : `player_bloc.dart`, `audio_engine.dart`, `session_manager.dart`
+  - Priorité : Haute (bloque l'utilisation basique de l'app)
+
+- [ ] **BUG 8** : Synchronisation imparfaite au premier play — se corrige après pause/play
+  - Au premier lancement, la synchro entre appareils n'est pas optimale (décalage audible)
+  - Si on fait pause puis play, la synchro s'améliore nettement
+  - Parfois il faut refaire pause/play plusieurs fois pour une synchro parfaite
+  - Cause probable : le clock offset n'est pas appliqué correctement au premier play, ou la calibration auto n'a pas encore convergé au moment du lancement
+  - Fichiers suspects : `clock_sync.dart`, `session_manager.dart`, `websocket_client.dart`
+  - Priorité : Haute (core feature — la synchro est le but principal de l'app)
+
 - [x] **SYNC 1** : Émettre SyncQualityChanged après chaque recalibration auto
   - Actuellement émis une seule fois après join
   - ✅ **DÉJÀ FAIT** : Timer périodique 10s appelle `_emitSyncQuality()`
@@ -293,6 +315,14 @@
 - [ ] **SYNC 2** : Guest pause/resume ne propage pas à l'hôte
   - Le guest peut mettre en pause localement mais l'hôte ne le sait pas
   - Priorité : Basse (comportement actuel = volume local)
+
+- [ ] **SPATIAL 1** : Spatialisation audio multi-appareils
+  - Répartir les canaux audio (L/R/C/RL/RR...) sur les appareils connectés selon leur nombre
+  - Configurations : 2 appareils → stéréo, 3 → L/C/R, 4 → quadraphonique, 5+ → surround
+  - L'utilisateur choisit la position de chaque appareil dans l'UI (ou auto-répartition)
+  - Nécessite de splitter le flux audio en canaux mono par appareil
+  - Impact : transforme MuSync en système surround avec des téléphones
+  - Priorité : Moyenne (feature différenciante, demande du créateur)
 
 ---
 

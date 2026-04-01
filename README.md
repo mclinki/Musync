@@ -7,8 +7,8 @@ Turn any collection of phones, tablets, or speakers into a synchronized multi-ro
 [![Flutter](https://img.shields.io/badge/Flutter-3.27-blue.svg)](https://flutter.dev)
 [![Dart](https://img.shields.io/badge/Dart-3.6-blue.svg)](https://dart.dev)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-48%2F48-passing-brightgreen.svg)](musync_app/test/)
-[![Version](https://img.shields.io/badge/Version-0.1.11-blue.svg)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/Tests-95%2F95-passing-brightgreen.svg)](musync_app/test/)
+[![Version](https://img.shields.io/badge/Version-0.1.15-blue.svg)](CHANGELOG.md)
 
 ---
 
@@ -23,6 +23,7 @@ Turn any collection of phones, tablets, or speakers into a synchronized multi-ro
 - **Auto-reconnection** — Seamless recovery from network hiccups
 - **Background playback** — Android foreground service keeps sessions alive
 - **File transfer** — Host automatically shares local files with slaves
+- **APK transfer** — Send app to devices on network, update connected devices
 - **Runtime permissions** — Android 13+ (NEARBY_WIFI_DEVICES, READ_MEDIA_AUDIO)
 - **Settings** — Theme, device name, default volume, cache management
 
@@ -32,9 +33,9 @@ Turn any collection of phones, tablets, or speakers into a synchronized multi-ro
 
 | Platform | Chemin | Statut |
 |----------|--------|--------|
-| **Android** | `musync_app/build/app/outputs/flutter-apk/app-debug.apk` | ✅ v0.1.11 |
+| **Android** | `musync_app/build/app/outputs/flutter-apk/app-debug.apk` | ✅ v0.1.15 |
 | **iOS** | Build via Xcode (`flutter build ios`) | ⚠️ Nécessite macOS |
-| **Windows** | `musync_app/build/windows/x64/Runner/Debug/` | ✅ v0.1.11 |
+| **Windows** | `musync_app/build/windows/x64/Runner/Debug/` | ✅ v0.1.15 |
 | **macOS** | Build via Xcode (`flutter build macos`) | ⚠️ Nécessite macOS |
 
 > **Note** : Les fichiers binaires ne sont pas inclus dans le dépôt GitHub (trop volumineux).
@@ -415,11 +416,37 @@ flutter analyze
 - [ ] ID3 metadata display
 - [ ] BLoC tests (Discovery)
 
+### 🔜 v0.2 — Prochainement
+- [ ] Per-device volume control
+- [ ] Saved groups (Firestore)
+- [ ] ID3 metadata display
+- [ ] BLoC tests (Discovery)
+- [ ] Afficher le nom de l'hôte pendant la connexion
+- [ ] Guest pause/resume propagation to host
+
 ### 🔮 v1.0
 - [ ] WSS/TLS encryption
+- [ ] Device authentication (session token)
 - [ ] Adaptive buffering
 - [ ] iOS background audio
 - [ ] Cross-network sync (experimental)
+- [ ] IP rotation handling (DHCP renewal)
+- [ ] Audio spatialization — distribute surround channels across devices (stereo, quad, 5.1...)
+
+### 🔧 Technique / Refactoring
+- [ ] Centraliser la gestion d'état session (SessionManager ↔ DiscoveryBloc)
+- [ ] Unifier AudioEngineState et PlayerStatus
+- [ ] Optimiser le timer de position (200ms → 500ms)
+- [ ] Optimiser le scan subnet (ARP cache)
+- [ ] Renommage classe AudioSession (collision avec le package)
+- [ ] Tests manquants : SessionManager, WebSocketClient, WebSocketServer
+- [ ] Mocks streams dans discovery_bloc_test
+
+### 📊 Observabilité
+- [ ] Métriques de performance (découverte, sync, transfert, latence)
+- [ ] Logging structuré (JSON)
+- [ ] Tests d'intégration réseau (hôte + esclave en boucle locale)
+- [ ] Versioning du protocole WebSocket
 
 ---
 

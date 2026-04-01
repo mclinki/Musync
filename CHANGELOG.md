@@ -5,6 +5,38 @@
 
 ---
 
+## Session du 2026-04-01 (v0.1.15) — Fixes Crashlytics + APK Transfer
+
+### Contexte
+Fix des 3 derniers bugs Crashlytics (CRASH-7/8/9), fixes Qwen P1/P2, et nouvelle fonctionnalité APK Transfer (envoyer l'app à un appareil du réseau + mettre à jour les appareils connectés). 95/95 tests passent.
+
+### Modifications
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 1 | `FIX` | CRASH-7 `just_audio Connection aborted` : retry 2x + timeout 10s + fallback | `audio_engine.dart` |
+| 2 | `FIX` | CRASH-8 `ANR slow operations` : timeouts init (permissions 5s, Firebase 10s, session 10s) | `main.dart` |
+| 3 | `FIX` | CRASH-9 `mDNS SocketException errno=103` : retry 2x + catch | `device_discovery.dart` |
+| 4 | `FIX` | QWEN-P1-2 Base64 overhead : binary frames WebSocket (format `[4B idx][4B len][data]`) | `file_transfer_service.dart`, `websocket_server.dart`, `websocket_client.dart` |
+| 5 | `FIX` | QWEN-P1-6 mDNS publishing fragile : retry logic ajouté | `device_discovery.dart` |
+| 6 | `FIX` | QWEN-P2-1 FirebaseService injection (DI) pour tests | `player_bloc.dart`, `discovery_bloc.dart`, `settings_bloc.dart` |
+| 7 | `FIX` | CONCEPTION 4 Timeout transfert fichiers : cleanup 10s + timeout 30s | `file_transfer_service.dart` |
+| 8 | `FEAT` | APK Transfer : envoyer l'app à un appareil + mettre à jour appareils connectés | `protocol_message.dart`, `settings_bloc.dart`, `settings_screen.dart`, `session_manager.dart`, `discovery_bloc.dart` |
+| 9 | `CHORE` | Version sync `0.1.14+14` → `0.1.15+15` | `pubspec.yaml`, `app_constants.dart` |
+| 10 | `TEST` | Tests unitaires : 95/95 passent | — |
+
+### Nouveaux messages protocole
+- `apkTransferOffer` — Hôte offre d'envoyer l'APK (version, taille)
+- `apkTransferAccept` — Esclave accepte le transfert
+- `apkTransferDecline` — Esclave refuse le transfert
+
+### UI Settings ajoutée
+- Section "Partager l'application"
+- "Envoyer l'APK" : liste les appareils découverts, envoie l'offre
+- "Mettre à jour les appareils" : envoie l'offre à tous les esclaves connectés (hôte uniquement)
+
+---
+
 ## Session du 2026-04-01 (v0.1.14) — Audit Qwen3.6-Plus + fixes critiques
 
 ### Contexte

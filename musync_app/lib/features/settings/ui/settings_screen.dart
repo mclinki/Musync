@@ -16,6 +16,8 @@ class SettingsScreen extends StatelessWidget {
 class _SettingsView extends StatelessWidget {
   const _SettingsView();
 
+  SessionManager get _sessionManager => SessionManager();
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -112,6 +114,52 @@ class _SettingsView extends StatelessWidget {
                   onChanged: null, // Disabled for now
                 ),
               ),
+
+              const Divider(height: 1),
+
+              // ── Partager l'application ──
+              _SectionHeader(title: 'Partager l\'application'),
+              ListTile(
+                leading: const Icon(Icons.share),
+                title: const Text('Envoyer l\'APK'),
+                subtitle: const Text('Partager l\'app avec un appareil du réseau'),
+                trailing: state.isApkTransferring
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.chevron_right),
+                onTap: state.isApkTransferring
+                    ? null
+                    : () => _showApkTransferDialog(context),
+              ),
+              if (_sessionManager.role == DeviceRole.host)
+                ListTile(
+                  leading: const Icon(Icons.system_update),
+                  title: const Text('Mettre à jour les appareils'),
+                  subtitle: Text(state.apkTransferStatus ?? 'Envoyer la mise à jour aux appareils connectés'),
+                  trailing: state.isApkTransferring
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.chevron_right),
+                  onTap: state.isApkTransferring
+                      ? null
+                      : () => _confirmUpdateDevices(context),
+                ),
+              if (state.apkTransferStatus != null && !state.isApkTransferring)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Text(
+                    state.apkTransferStatus!,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                  ),
+                ),
 
               const Divider(height: 1),
 
@@ -286,6 +334,93 @@ class _SettingsView extends StatelessWidget {
               });
             },
             child: const Text('Vider'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showApkTransferDialog(BuildContext context) {
+    final devices = _sessionManager.discoveredDevices;
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('Envoyer l\'APK'),
+        children: [
+          if (devices.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('Aucun appareil trouvé. Lancez une recherche depuis l\'écran de découverte.'),
+            )
+          else
+            ...devices.values.map((device) => SimpleDialogOption(
+                  onPressed: () {
+                    Navigator.pop(dialogContext);
+                    context.read<SettingsBloc>().add(ApkTransferToDeviceRequested(device));
+                  },
+                  child: Row(
+                    children: [
+                      Icon(
+                        device.type == DeviceType.phone
+                            ? Icons.phone_android
+                            : Icons.computer,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(device.name),
+                            Text(
+                              '${device.ip}:${device.port}',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                )),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              'Version: ${AppConstants.appVersion}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmUpdateDevices(BuildContext context) {
+    final session = _sessionManager.currentSession;
+    if (session == null || session.slaves.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Aucun appareil connecté')),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Mettre à jour les appareils'),
+        content: Text(
+          'Envoyer la version ${AppConstants.appVersion} à ${session.slaves.length} appareil(s) connecté(s) ?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () {
+              context.read<SettingsBloc>().add(const ApkUpdateConnectedDeviceRequested());
+              Navigator.pop(dialogContext);
+            },
+            child: const Text('Envoyer'),
           ),
         ],
       ),
