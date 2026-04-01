@@ -115,7 +115,7 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     Logger? logger,
   })  : _prefs = prefs,
         _sessionManager = sessionManager,
-        _firebase = firebase ?? _firebase,
+        _firebase = firebase ?? FirebaseService(),
         _logger = logger ?? Logger(),
         super(const SettingsState()) {
     on<LoadSettings>(_onLoadSettings);

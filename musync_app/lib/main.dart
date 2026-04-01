@@ -18,9 +18,7 @@ void main() async {
   try {
     await permissions.requestAllPermissions().timeout(
       const Duration(seconds: 5),
-      onTimeout: () {
-        // Continue without permissions - user can grant later
-      },
+      onTimeout: () => false, // Continue without permissions
     );
   } catch (_) {
     // Permissions not critical for startup
@@ -32,7 +30,8 @@ void main() async {
     await firebase.initialize().timeout(
       const Duration(seconds: 10),
       onTimeout: () {
-        // Continue without Firebase
+        // Continue without Firebase - return void
+        return;
       },
     );
   } catch (_) {
