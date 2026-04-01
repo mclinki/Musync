@@ -1,8 +1,8 @@
 # MusyncMIMO — Backlog de Tâches
 
-## 🔥 Bugs Crashlytics — v0.1.11 (194 events, 6 users)
+## 🔥 Bugs Crashlytics — v0.1.14 (282 events, 7 users)
 
-> Source : Firebase Crashlytics API — 7 derniers jours (24 mars → 31 mars 2026)
+> Source : Firebase Crashlytics API — 7 derniers jours (25 mars → 1 avril 2026)
 
 ### 🔴 P0 — Critique
 
@@ -79,6 +79,28 @@
   - Fichier : `multicast_dns.dart` → `MDnsClient.lookup`
   - ✅ **FIXÉ** : Retry logic (2 tentatives) + catch SocketException
   - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/2674000b5de0c894cee869a400cd4947)
+
+### 🔴 P0 — Critique (nouveaux — 2026-04-01)
+
+- [ ] **CRASH-10** : `InheritedElement.debugDeactivated` — assertion `_dependents.isEmpty` failed
+  - 47 events · 7 users · 12 sessions · **FATAL**
+  - Signal : répétitif (7x/user), fresh (3 jours)
+  - Fichier : `framework.dart` → `InheritedElement.debugDeactivated`
+  - Stack : Overlay/LabeledGlobalKey → widget tree corrompu par dépendants orphelins
+  - Cause probable : liens de dépendance InheritedWidget non nettoyés lors de la déactivation d'éléments (cascade de CRASH-2/CRASH-3)
+  - Dernière version : v0.1.14 (toujours actif !)
+  - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/d4d49198d79d5f30aa15fd9045a6ad77)
+
+### 🟠 P1 — Important (nouveaux — 2026-04-01)
+
+- [ ] **CRASH-11** : `RenderFlex.performLayout` — children have non-zero flex but unbounded height constraints
+  - 3 events · 2 users · 3 sessions · **FATAL**
+  - Signal : fresh (hier)
+  - Fichier : `flex.dart` → `RenderFlex.performLayout`
+  - Stack : Column dans un scrollable sans hauteur finie → Expanded/Flexible sans contrainte
+  - Cause probable : Column avec Expanded dans un parent scrollable (même pattern que CRASH-1 mais vue différente)
+  - Dernière version : v0.1.13
+  - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/9505a8fcbbb01ff432f4019f7ec597fb)
 
 ---
 
