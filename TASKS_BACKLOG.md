@@ -316,10 +316,10 @@
 
 ### 🔴 P0 — Critique
 
-- [ ] **QWEN-P0-3** : Fuite mémoire — `FileTransferService.dispose()` jamais appelé
+- [x] **QWEN-P0-3** : Fuite mémoire — `FileTransferService.dispose()` jamais appelé
   - `SessionManager.dispose()` ne ferme pas le `_progressController` du service
   - Impact : fuite mémoire progressive sur sessions longues / reconnexions multiples
-  - Fix : 1 ligne — `await _fileTransfer.dispose()` dans `SessionManager.dispose()`
+  - ✅ **FIXÉ** : `await _fileTransfer.dispose()` ajouté dans `SessionManager.dispose()`
   - 📄 Rapport : §P0-3
 
 ### 🟠 P1 — Important
@@ -329,9 +329,10 @@
   - Impact : bande passante ×1.33, mémoire ×1.33, transferts plus lents
   - 📄 Rapport : §P1-2
 
-- [ ] **QWEN-P1-3** : Pas de gestion de backpressure dans le transfert
+- [x] **QWEN-P1-3** : Pas de gestion de backpressure dans le transfert
   - L'hôte envoie des chunks sans vérifier si les sockets esclaves sont prêts
   - Impact : saturation mémoire hôte, déconnexion d'esclaves lents
+  - ✅ **FIXÉ (simplifié)** : délai 10ms entre chaque chunk (au lieu de 5ms/5 chunks)
   - 📄 Rapport : §P1-3
 
 - [ ] **QWEN-P1-6** : mDNS publishing manuel fragile
@@ -346,9 +347,10 @@
   - Impact : session irrécupérable après changement de réseau
   - 📄 Rapport : §P2-4
 
-- [ ] **QWEN-P2-5** : Pas de gestion des interruptions audio (appel, alarme)
+- [x] **QWEN-P2-5** : Pas de gestion des interruptions audio (appel, alarme)
   - `AudioEngine` ne gère pas `audioSession.interruptionEventStream`
   - Impact : lecture interrompue sans reprise automatique après un appel
+  - ✅ **FIXÉ** : `_interruptionSub` ajouté + handler `_handleInterruption()` (pause/resume auto)
   - 📄 Rapport : §P2-5
 
 - [ ] **QWEN-P2-1** : `FirebaseService()` instancié directement au lieu d'être injecté
@@ -356,9 +358,10 @@
   - Impact : couplage fort, mocking impossible pour les tests
   - 📄 Rapport : §P2-1
 
-- [ ] **QWEN-P2-2** : `analysis_options.yaml` — linter presque vide
+- [x] **QWEN-P2-2** : `analysis_options.yaml` — linter presque vide
   - Aucune règle activée au-delà du défaut (pas de `unawaited_futures`, `prefer_const_constructors`, etc.)
   - Impact : bugs asynchrones silencieux, incohérences de style
+  - ✅ **FIXÉ** : 12 règles ajoutées (`prefer_const`, `unawaited_futures`, `avoid_print`, etc.)
   - 📄 Rapport : §P2-2
 
 ### 🟢 P3 — Améliorations

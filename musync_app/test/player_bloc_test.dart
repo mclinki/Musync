@@ -130,7 +130,10 @@ void main() {
 
     blocTest<PlayerBloc, PlayerState>(
       'ClearQueueRequested clears playlist and resets track',
-      build: () => PlayerBloc(sessionManager: sessionManager),
+      build: () {
+        when(() => audioEngine.stop()).thenAnswer((_) async {});
+        return PlayerBloc(sessionManager: sessionManager);
+      },
       act: (bloc) {
         bloc.add(AddToQueueRequested(AudioTrack.fromFilePath('/test/song1.mp3')));
         bloc.add(const ClearQueueRequested());
