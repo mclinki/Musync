@@ -307,6 +307,13 @@
   - Fichiers suspects : `clock_sync.dart`, `session_manager.dart`, `websocket_client.dart`
   - Priorité : Haute (core feature — la synchro est le but principal de l'app)
 
+- [ ] **BUG 9** : `LateInitializationError: Field '_discovery' has not been initialized`
+  - Crash quand on appuie sur "Partager l'app" dans les paramètres
+  - Cause : `SessionManager` accède à `_discovery` (late) avant `initialize()`
+  - Fix : vérifier si `_discovery` est initialisé avant d'accéder à `discoveredDevices`
+  - Fichier : `session_manager.dart` (getter `discoveredDevices`), `settings_screen.dart`
+  - Priorité : Haute (crash utilisateur)
+
 - [x] **SYNC 1** : Émettre SyncQualityChanged après chaque recalibration auto
   - Actuellement émis une seule fois après join
   - ✅ **DÉJÀ FAIT** : Timer périodique 10s appelle `_emitSyncQuality()`
