@@ -239,6 +239,7 @@ class DeviceDiscovery {
   // ── mDNS Publishing ──
 
   /// Start a UDP multicast socket that responds to mDNS queries for our service.
+  /// Includes retry logic for SocketException (CRASH-9 fix).
   Future<void> _startMdnsPublisher({int port = kDefaultPort}) async {
     // Skip mDNS on Windows (reusePort not supported)
     if (Platform.isWindows) {
@@ -246,37 +247,53 @@ class DeviceDiscovery {
       return;
     }
 
-    try {
-      // Resolve local IP for the A record before publishing
-      final localIp = await getLocalIp();
-      if (localIp != null) {
-        _localIpBytes = Uint8List.fromList(
-          localIp.split('.').map(int.parse).toList(),
-        );
-      }
-
-      _mdnsPublishSocket = await RawDatagramSocket.bind(
-        InternetAddress.anyIPv4,
-        kMdnsPort,
-        reuseAddress: true,
-        reusePort: true,
-      );
-
-      // Join multicast group
-      _mdnsPublishSocket!.joinMulticast(kMdnsMulticastAddress);
-
-      _logger.i('mDNS publisher listening on port $kMdnsPort');
-
-      _mdnsPublishSocket!.listen((RawSocketEvent event) {
-        if (event == RawSocketEvent.read) {
-          final datagram = _mdnsPublishSocket!.receive();
-          if (datagram != null) {
-            _handleMdnsQuery(datagram, port: port);
-          }
+    const maxRetries = 2;
+    for (int attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        // Resolve local IP for the A record before publishing
+        final localIp = await getLocalIp();
+        if (localIp != null) {
+          _localIpBytes = Uint8List.fromList(
+            localIp.split('.').map(int.parse).toList(),
+          );
         }
-      });
-    } catch (e) {
-      _logger.w('mDNS publisher failed to start (non-critical): $e');
+
+        _mdnsPublishSocket = await RawDatagramSocket.bind(
+          InternetAddress.anyIPv4,
+          kMdnsPort,
+          reuseAddress: true,
+          reusePort: true,
+        );
+
+        // Join multicast group
+        _mdnsPublishSocket!.joinMulticast(kMdnsMulticastAddress);
+
+        _logger.i('mDNS publisher listening on port $kMdnsPort');
+
+        _mdnsPublishSocket!.listen((RawSocketEvent event) {
+          if (event == RawSocketEvent.read) {
+            final datagram = _mdnsPublishSocket!.receive();
+            if (datagram != null) {
+              _handleMdnsQuery(datagram, port: port);
+            }
+          }
+        });
+
+        return; // Success
+      } catch (e) {
+        final errorStr = e.toString().toLowerCase();
+        final isSocketError = errorStr.contains('socket') ||
+            errorStr.contains('errno') ||
+            errorStr.contains('address already in use');
+
+        if (isSocketError && attempt < maxRetries) {
+          _logger.w('mDNS publisher retry ${attempt + 1}/$maxRetries: $e');
+          await Future.delayed(Duration(milliseconds: 1000 * (attempt + 1)));
+        } else {
+          _logger.w('mDNS publisher failed to start (non-critical): $e');
+          return; // Don't crash the app
+        }
+      }
     }
   }
 

@@ -53,10 +53,9 @@ class FileTransferService {
   /// Get the cache directory path.
   String? get cachePath => _tempDir?.path;
 
-  /// Send a file to all connected slaves.
+  /// Send a file to all connected slaves using binary frames.
   /// Returns true when all chunks have been sent (does NOT wait for ACKs).
-  /// ACKs are handled asynchronously by the session manager.
-  /// The [timeout] parameter is reserved for future ACK-based confirmation.
+  /// Uses binary WebSocket frames instead of Base64 encoding (QWEN-P1-2 fix).
   Future<bool> sendFile({
     required String filePath,
     required WebSocketServer server,
@@ -73,7 +72,7 @@ class FileTransferService {
     const chunkSize = AppConstants.fileChunkSizeBytes;
     final totalChunks = (fileSize / chunkSize).ceil();
 
-    _logger.i('=== STARTING FILE TRANSFER ===');
+    _logger.i('=== STARTING FILE TRANSFER (binary) ===');
     _logger.i('fileName: $fileName');
     _logger.i('fileSize: ${formatBytes(fileSize)}');
     _logger.i('totalChunks: $totalChunks');
@@ -92,7 +91,7 @@ class FileTransferService {
     // Wait a bit for slaves to prepare
     await Future.delayed(const Duration(milliseconds: 500));
 
-    // Send chunks - stream from disk instead of loading entire file into memory
+    // Send chunks as binary frames - stream from disk
     final reader = file.openRead();
     int offset = 0;
     int chunkIndex = 0;
@@ -104,13 +103,10 @@ class FileTransferService {
       while (buffer.length >= chunkSize) {
         final chunk = buffer.sublist(0, chunkSize);
         buffer.removeRange(0, chunkSize);
-        final base64Data = base64Encode(chunk);
 
-        final chunkMsg = ProtocolMessage.fileTransferChunk(
-          chunkIndex: chunkIndex,
-          data: base64Data,
-        );
-        server.broadcast(chunkMsg);
+        // Send binary frame with chunk header
+        final binaryFrame = _buildBinaryChunkFrame(chunkIndex, chunk);
+        await server.broadcastBinary(binaryFrame);
 
         offset += chunkSize;
         chunkIndex++;
@@ -133,12 +129,8 @@ class FileTransferService {
 
     // Send remaining bytes as last chunk
     if (buffer.isNotEmpty) {
-      final base64Data = base64Encode(buffer);
-      final chunkMsg = ProtocolMessage.fileTransferChunk(
-        chunkIndex: chunkIndex,
-        data: base64Data,
-      );
-      server.broadcast(chunkMsg);
+      final binaryFrame = _buildBinaryChunkFrame(chunkIndex, buffer);
+      await server.broadcastBinary(binaryFrame);
       offset += buffer.length;
       chunkIndex++;
       _logger.d('Sent final chunk $chunkIndex/$totalChunks (${formatBytes(offset)}/${formatBytes(fileSize)})');
@@ -164,6 +156,37 @@ class FileTransferService {
     return true;
   }
 
+  /// Build a binary frame for a file chunk.
+  /// Format: [4 bytes chunkIndex][4 bytes dataLength][data...]
+  List<int> _buildBinaryChunkFrame(int chunkIndex, List<int> data) {
+    final frame = BytesBuilder();
+    // Chunk index (4 bytes, big-endian)
+    frame.addByte((chunkIndex >> 24) & 0xFF);
+    frame.addByte((chunkIndex >> 16) & 0xFF);
+    frame.addByte((chunkIndex >> 8) & 0xFF);
+    frame.addByte(chunkIndex & 0xFF);
+    // Data length (4 bytes, big-endian)
+    final dataLength = data.length;
+    frame.addByte((dataLength >> 24) & 0xFF);
+    frame.addByte((dataLength >> 16) & 0xFF);
+    frame.addByte((dataLength >> 8) & 0xFF);
+    frame.addByte(dataLength & 0xFF);
+    // Data
+    frame.add(data);
+    return frame.toBytes();
+  }
+
+  /// Parse a binary chunk frame.
+  /// Returns (chunkIndex, data) or null if invalid.
+  static (int, List<int>)? parseBinaryChunkFrame(List<int> frame) {
+    if (frame.length < 8) return null;
+    final chunkIndex = (frame[0] << 24) | (frame[1] << 16) | (frame[2] << 8) | frame[3];
+    final dataLength = (frame[4] << 24) | (frame[5] << 16) | (frame[6] << 8) | frame[7];
+    if (frame.length < 8 + dataLength) return null;
+    final data = frame.sublist(8, 8 + dataLength);
+    return (chunkIndex, data);
+  }
+
   /// Handle incoming file transfer messages (slave side).
   /// Returns the local file path when transfer is complete, or null on error.
   Future<String?> handleIncomingMessage(ProtocolMessage message) async {
@@ -177,6 +200,59 @@ class FileTransferService {
       default:
         return null;
     }
+  }
+
+  /// Handle incoming binary file transfer chunk (slave side).
+  /// Returns the local file path when transfer is complete, or null on error.
+  Future<String?> handleBinaryChunk(List<int> binaryData) async {
+    final parsed = parseBinaryChunkFrame(binaryData);
+    if (parsed == null) {
+      _logger.w('Invalid binary chunk frame');
+      return null;
+    }
+
+    final (chunkIndex, data) = parsed;
+    return _handleBinaryTransferChunk(chunkIndex, data);
+  }
+
+  /// Handle binary transfer chunk.
+  Future<String?> _handleBinaryTransferChunk(int chunkIndex, List<int> data) async {
+    if (_incomingTransfers.isEmpty) {
+      _logger.w('Received binary chunk but no active transfer!');
+      return null;
+    }
+
+    if (chunkIndex < 0) {
+      _logger.w('Invalid chunk index: $chunkIndex');
+      return null;
+    }
+
+    // Find the transfer this chunk belongs to (most recent if ambiguous)
+    final transfer = _incomingTransfers.values.last;
+
+    // Verify chunk order - insert at correct index
+    if (chunkIndex < transfer.totalChunks) {
+      // Ensure the chunks list has enough capacity
+      while (transfer.chunks.length <= chunkIndex) {
+        transfer.chunks.add(Uint8List(0));
+      }
+      transfer.chunks[chunkIndex] = Uint8List.fromList(data);
+    } else {
+      _logger.w('Received chunk $chunkIndex but totalChunks is ${transfer.totalChunks}');
+    }
+
+    final receivedCount = transfer.chunks.where((c) => c.isNotEmpty).length;
+    _logger.d('Received binary chunk $chunkIndex, total chunks: $receivedCount/${transfer.totalChunks}');
+
+    // Report progress
+    _progressController.add(TransferProgress(
+      fileName: transfer.fileName,
+      bytesTransferred: transfer.chunks.fold<int>(0, (sum, chunk) => sum + chunk.length),
+      totalBytes: transfer.fileSize,
+      isIncoming: true,
+    ));
+
+    return null;
   }
 
   Future<String?> _handleTransferStart(ProtocolMessage message) async {

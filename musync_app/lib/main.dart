@@ -13,14 +13,28 @@ import 'features/settings/ui/settings_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 1. Request runtime permissions (Android 13+)
+  // 1. Request runtime permissions (Android 13+) — with timeout to prevent ANR
   final permissions = PermissionService();
-  await permissions.requestAllPermissions();
+  try {
+    await permissions.requestAllPermissions().timeout(
+      const Duration(seconds: 5),
+      onTimeout: () {
+        // Continue without permissions - user can grant later
+      },
+    );
+  } catch (_) {
+    // Permissions not critical for startup
+  }
 
-  // 2. Initialize Firebase (optional - app works without it)
+  // 2. Initialize Firebase (optional - app works without it) — with timeout
   final firebase = FirebaseService();
   try {
-    await firebase.initialize();
+    await firebase.initialize().timeout(
+      const Duration(seconds: 10),
+      onTimeout: () {
+        // Continue without Firebase
+      },
+    );
   } catch (_) {
     // Firebase not configured - app continues without it
   }
@@ -36,12 +50,21 @@ void main() async {
   // 4. Generate device ID
   final deviceId = const Uuid().v4();
 
-  // 5. Initialize session manager
-  await sessionManager.initialize(
-    deviceId: deviceId,
-    deviceName: 'MusyncMIMO Device',
-    deviceType: 'phone',
-  );
+  // 5. Initialize session manager — with timeout to prevent ANR
+  try {
+    await sessionManager.initialize(
+      deviceId: deviceId,
+      deviceName: 'MusyncMIMO Device',
+      deviceType: 'phone',
+    ).timeout(
+      const Duration(seconds: 10),
+      onTimeout: () {
+        // Continue with partial initialization
+      },
+    );
+  } catch (_) {
+    // Session manager initialization failed - app continues with limited functionality
+  }
 
   // 5. Log device info to Crashlytics (if available)
   if (firebase.isInitialized) {

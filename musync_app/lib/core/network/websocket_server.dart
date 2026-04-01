@@ -191,6 +191,33 @@ class WebSocketServer {
     }
   }
 
+  /// Broadcast binary data to all connected slaves.
+  /// Used for file transfer binary frames (QWEN-P1-2 fix).
+  Future<void> broadcastBinary(List<int> data) async {
+    final slavesCopy = [..._slaves.values];
+    for (final slave in slavesCopy) {
+      try {
+        slave.socket.add(data);
+      } catch (e) {
+        _logger.e('Error sending binary to ${slave.deviceName}: $e');
+      }
+    }
+  }
+
+  /// Send binary data to a specific slave.
+  Future<void> sendBinaryToSlave(String deviceId, List<int> data) async {
+    final slave = _slaves[deviceId];
+    if (slave == null) {
+      _logger.w('Cannot send binary to unknown device: $deviceId');
+      return;
+    }
+    try {
+      slave.socket.add(data);
+    } catch (e) {
+      _logger.e('Error sending binary to $deviceId: $e');
+    }
+  }
+
   // ── Internal ──
 
   void _handleRequest(HttpRequest request) async {
@@ -216,34 +243,60 @@ class WebSocketServer {
 
   void _handleMessage(WebSocket socket, dynamic data) {
     try {
-      if (data is! String) {
-        _logger.w('Received non-string message: ${data.runtimeType}');
-        return;
-      }
-      final message = ProtocolMessage.decode(data);
+      if (data is String) {
+        // Handle JSON message
+        final message = ProtocolMessage.decode(data);
 
-      switch (message.type) {
-        case MessageType.join:
-          _handleJoin(socket, message);
-          break;
-        case MessageType.syncRequest:
-          _handleSyncRequest(socket, message);
-          break;
-        case MessageType.heartbeatAck:
-          _handleHeartbeatAck(socket, message);
-          break;
-        case MessageType.audioReady:
-          _handleAudioReady(socket, message);
-          break;
-        case MessageType.disconnect:
-          _handleDisconnectMessage(socket, message);
-          break;
-        default:
-          _logger.w('Unhandled message type: ${message.type}');
+        switch (message.type) {
+          case MessageType.join:
+            _handleJoin(socket, message);
+            break;
+          case MessageType.syncRequest:
+            _handleSyncRequest(socket, message);
+            break;
+          case MessageType.heartbeatAck:
+            _handleHeartbeatAck(socket, message);
+            break;
+          case MessageType.audioReady:
+            _handleAudioReady(socket, message);
+            break;
+          case MessageType.disconnect:
+            _handleDisconnectMessage(socket, message);
+            break;
+          default:
+            _logger.w('Unhandled message type: ${message.type}');
+        }
+      } else if (data is List<int>) {
+        // Handle binary data (file transfer chunks)
+        _handleBinaryMessage(socket, data);
+      } else {
+        _logger.w('Received unknown message type: ${data.runtimeType}');
       }
     } catch (e) {
       _logger.e('Error handling message: $e');
     }
+  }
+
+  /// Handle binary messages (file transfer chunks).
+  void _handleBinaryMessage(WebSocket socket, List<int> data) {
+    // Binary chunks are handled by the file transfer service
+    // Add to event stream for processing
+    _eventController.add(ServerEvent(
+      type: ServerEventType.messageReceived,
+      deviceId: _getDeviceIdForSocket(socket) ?? 'unknown',
+      deviceName: 'unknown',
+      data: data,
+    ));
+  }
+
+  /// Get device ID for a socket.
+  String? _getDeviceIdForSocket(WebSocket socket) {
+    for (final entry in _slaves.entries) {
+      if (entry.value.socket == socket) {
+        return entry.key;
+      }
+    }
+    return null;
   }
 
   void _handleJoin(WebSocket socket, ProtocolMessage message) {
@@ -412,6 +465,7 @@ enum ServerEventType {
   deviceConnected,
   deviceDisconnected,
   deviceReady,
+  messageReceived,
   error,
 }
 
@@ -420,11 +474,13 @@ class ServerEvent {
   final String deviceId;
   final String deviceName;
   final String? reason;
+  final dynamic data; // Binary data for file transfer chunks
 
   const ServerEvent({
     required this.type,
     required this.deviceId,
     required this.deviceName,
     this.reason,
+    this.data,
   });
 }

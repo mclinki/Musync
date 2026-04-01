@@ -280,63 +280,70 @@ class WebSocketClient {
 
   void _handleMessage(dynamic data) {
     try {
-      if (data is! String) {
-        _logger.w('Received non-string message: ${data.runtimeType}');
-        return;
-      }
-      final message = ProtocolMessage.decode(data);
+      if (data is String) {
+        // Handle JSON message
+        final message = ProtocolMessage.decode(data);
 
-      switch (message.type) {
-        case MessageType.welcome:
-          _handleWelcome(message);
-          break;
-        case MessageType.reject:
-          _handleReject(message);
-          break;
-        case MessageType.syncRequest:
-          _handleHostSyncRequest(message);
-          break;
-        case MessageType.syncResponse:
-          _handleSyncResponse(message);
-          break;
-        case MessageType.clockAdjust:
-          _handleClockAdjust(message);
-          break;
-        case MessageType.prepare:
-          _handlePrepare(message);
-          break;
-        case MessageType.play:
-          _handlePlay(message);
-          break;
-        case MessageType.pause:
-          _handlePause(message);
-          break;
-        case MessageType.seek:
-          _handleSeek(message);
-          break;
-        case MessageType.skipNext:
-          _handleSkipNext(message);
-          break;
-        case MessageType.skipPrev:
-          _handleSkipPrev(message);
-          break;
-        case MessageType.playlistUpdate:
-          _handlePlaylistUpdate(message);
-          break;
-        case MessageType.heartbeat:
-          _handleHeartbeat();
-          break;
-        case MessageType.fileTransferStart:
-        case MessageType.fileTransferChunk:
-        case MessageType.fileTransferEnd:
-          // File transfer messages are handled by the session manager
-          _eventController.add(ClientEvent(
-            type: ClientEventType.fileTransferMessage,
-            protocolMessage: message,
-          ));
-          break;
-        default:
-          _logger.d('Unhandled message type: ${message.type}');
+        switch (message.type) {
+          case MessageType.welcome:
+            _handleWelcome(message);
+            break;
+          case MessageType.reject:
+            _handleReject(message);
+            break;
+          case MessageType.syncRequest:
+            _handleHostSyncRequest(message);
+            break;
+          case MessageType.syncResponse:
+            _handleSyncResponse(message);
+            break;
+          case MessageType.clockAdjust:
+            _handleClockAdjust(message);
+            break;
+          case MessageType.prepare:
+            _handlePrepare(message);
+            break;
+          case MessageType.play:
+            _handlePlay(message);
+            break;
+          case MessageType.pause:
+            _handlePause(message);
+            break;
+          case MessageType.seek:
+            _handleSeek(message);
+            break;
+          case MessageType.skipNext:
+            _handleSkipNext(message);
+            break;
+          case MessageType.skipPrev:
+            _handleSkipPrev(message);
+            break;
+          case MessageType.playlistUpdate:
+            _handlePlaylistUpdate(message);
+            break;
+          case MessageType.heartbeat:
+            _handleHeartbeat();
+            break;
+          case MessageType.fileTransferStart:
+          case MessageType.fileTransferChunk:
+          case MessageType.fileTransferEnd:
+            // File transfer messages are handled by the session manager
+            _eventController.add(ClientEvent(
+              type: ClientEventType.fileTransferMessage,
+              protocolMessage: message,
+            ));
+            break;
+          default:
+            _logger.d('Unhandled message type: ${message.type}');
+        }
+      } else if (data is List<int>) {
+        // Handle binary data (file transfer chunks)
+        _eventController.add(ClientEvent(
+          type: ClientEventType.fileTransferBinary,
+          binaryData: data,
+        ));
+      } else {
+        _logger.w('Received unknown message type: ${data.runtimeType}');
       }
     } catch (e) {
       _logger.e('Error handling message: $e');
@@ -563,6 +570,7 @@ enum ClientEventType {
   skipPrevCommand,
   playlistUpdateCommand,
   fileTransferMessage,
+  fileTransferBinary,
   error,
 }
 
@@ -578,6 +586,7 @@ class ClientEvent {
   final ProtocolMessage? protocolMessage;
   final List<Map<String, dynamic>>? playlistTracks;
   final int? playlistCurrentIndex;
+  final List<int>? binaryData; // Binary data for file transfer chunks
 
   const ClientEvent({
     required this.type,
@@ -591,5 +600,6 @@ class ClientEvent {
     this.protocolMessage,
     this.playlistTracks,
     this.playlistCurrentIndex,
+    this.binaryData,
   });
 }

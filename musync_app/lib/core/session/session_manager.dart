@@ -548,10 +548,23 @@ class SessionManager {
       case ServerEventType.deviceReady:
         _logger.i('Device ready: ${event.deviceName}');
         break;
+      case ServerEventType.messageReceived:
+        // Binary messages are handled by the file transfer service
+        if (event.data is List<int>) {
+          _handleServerBinaryMessage(event.deviceId, event.data as List<int>);
+        }
+        break;
       case ServerEventType.error:
         _logger.e('Server error: ${event.reason}');
         break;
     }
+  }
+
+  /// Handle binary messages from the server (file transfer chunks).
+  Future<void> _handleServerBinaryMessage(String deviceId, List<int> data) async {
+    _logger.d('Received binary message from $deviceId (${data.length} bytes)');
+    // Binary chunks are handled by the file transfer service
+    // This is a placeholder - actual handling is done in the file transfer service
   }
 
   void _handleClientEvent(ClientEvent event) {
@@ -591,6 +604,9 @@ class SessionManager {
         break;
       case ClientEventType.fileTransferMessage:
         _handleFileTransferMessage(event);
+        break;
+      case ClientEventType.fileTransferBinary:
+        _handleFileTransferBinary(event);
         break;
       case ClientEventType.disconnected:
         _logger.i('Disconnected from host');
@@ -835,6 +851,43 @@ class SessionManager {
       }
     } else {
       _logger.d('File transfer in progress or not complete yet');
+    }
+  }
+
+  Future<void> _handleFileTransferBinary(ClientEvent event) async {
+    if (event.binaryData == null) {
+      _logger.w('Received file transfer binary with null data');
+      return;
+    }
+
+    _logger.d('=== PROCESSING BINARY FILE TRANSFER CHUNK ===');
+
+    final result = await _fileTransfer.handleBinaryChunk(event.binaryData!);
+
+    if (result != null) {
+      // File transfer complete, result is the local file path
+      _cachedFilePath = result;
+      _logger.i('=== FILE TRANSFER COMPLETE (binary) ===');
+      _logger.i('File saved at: $result');
+
+      // Send ACK to host
+      if (_client != null) {
+        final ack = ProtocolMessage.fileTransferAck();
+        _client!.sendMessage(ack);
+        _logger.d('Sent file transfer ACK to host');
+      }
+
+      // Auto-preload the track so it's ready when play command arrives
+      try {
+        final file = File(result);
+        if (await file.exists()) {
+          final track = AudioTrack.fromFilePath(result);
+          await _audioEngine.preloadTrack(track);
+          _logger.i('Auto-preloaded track after file transfer: ${track.title}');
+        }
+      } catch (e) {
+        _logger.w('Auto-preload after transfer failed (non-critical): $e');
+      }
     }
   }
 

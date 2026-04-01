@@ -151,28 +151,64 @@ class AudioEngine {
       _logger.i('Track preloaded: ${track.title}');
     } catch (e) {
       _logger.w('Preload failed (non-critical): $e');
+      _preloadedSource = null;
     }
   }
 
   /// Load a preloaded track for immediate playback.
   /// Falls back to regular loadTrack if not preloaded.
+  /// Includes retry logic for connection errors (CRASH-7 fix).
   Future<void> loadPreloaded(AudioTrack track) async {
     if (_preloadedSource != null) {
       _logger.i('Loading preloaded track: ${track.title}');
       _setState(AudioEngineState.loading);
 
       try {
-        await _player.setAudioSource(_preloadedSource!);
+        await _player.setAudioSource(_preloadedSource!).timeout(
+          const Duration(seconds: 10),
+          onTimeout: () {
+            throw TimeoutException('Audio source load timed out');
+          },
+        );
         _currentTrack = track;
         _preloadedSource = null;
         _logger.i('Preloaded track loaded successfully');
       } catch (e) {
         _logger.w('Failed to load preloaded source, falling back to regular load: $e');
-        await loadTrack(track);
+        _preloadedSource = null;
+        // Fallback with retry
+        await _loadTrackWithRetry(track);
       }
     } else {
-      await loadTrack(track);
+      await _loadTrackWithRetry(track);
     }
+  }
+
+  /// Load track with retry logic for connection errors.
+  Future<void> _loadTrackWithRetry(AudioTrack track, {int maxRetries = 2}) async {
+    for (int attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        await loadTrack(track);
+        return; // Success
+      } catch (e) {
+        if (attempt < maxRetries && _isRetryableError(e)) {
+          _logger.w('Retry ${attempt + 1}/$maxRetries for track load: $e');
+          await Future.delayed(Duration(milliseconds: 500 * (attempt + 1)));
+        } else {
+          rethrow;
+        }
+      }
+    }
+  }
+
+  /// Check if an error is retryable (connection errors, timeouts).
+  bool _isRetryableError(dynamic error) {
+    final errorStr = error.toString().toLowerCase();
+    return errorStr.contains('connection aborted') ||
+        errorStr.contains('connection refused') ||
+        errorStr.contains('timeout') ||
+        errorStr.contains('socket') ||
+        errorStr.contains('errno');
   }
 
   /// Play immediately.

@@ -65,16 +65,19 @@
 - [ ] **CRASH-7** : `just_audio Connection aborted` (loadPreloaded)
   - 3 events · 1 user · 1 session · **NON_FATAL**
   - Fichier : `just_audio.dart` → `AudioPlayer._load`
+  - ✅ **FIXÉ** : Retry logic + timeout 10s + fallback loadTrack
   - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/145c1c46c78706f9c589369bc5e02067)
 
 - [ ] **CRASH-8** : `ANR — slow operations in main thread`
   - 2 events · 1 user · 1 session · **ANR**
   - Cause probable : opération bloquante sur le thread principal
+  - ✅ **FIXÉ** : Timeouts sur init (permissions 5s, Firebase 10s, session 10s)
   - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/a67b188e9d38c13f2dc537ba35ae24c0)
 
 - [ ] **CRASH-9** : `mDNS SocketException errno=103` (port 5353)
   - 1 event · 1 user · 1 session · **FATAL**
   - Fichier : `multicast_dns.dart` → `MDnsClient.lookup`
+  - ✅ **FIXÉ** : Retry logic (2 tentatives) + catch SocketException
   - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/2674000b5de0c894cee869a400cd4947)
 
 ---
@@ -324,9 +327,10 @@
 
 ### 🟠 P1 — Important
 
-- [ ] **QWEN-P1-2** : Transfert de fichiers en Base64 — surcoût 33 %
+- [x] **QWEN-P1-2** : Transfert de fichiers en Base64 — surcoût 33 %
   - `file_transfer_service.dart` encode chaque chunk en Base64 au lieu d'utiliser les WebSocket binary frames natifs
   - Impact : bande passante ×1.33, mémoire ×1.33, transferts plus lents
+  - ✅ **FIXÉ** : Binary frames WebSocket implémentés (format: [4B chunkIndex][4B dataLength][data])
   - 📄 Rapport : §P1-2
 
 - [x] **QWEN-P1-3** : Pas de gestion de backpressure dans le transfert
@@ -335,9 +339,10 @@
   - ✅ **FIXÉ (simplifié)** : délai 10ms entre chaque chunk (au lieu de 5ms/5 chunks)
   - 📄 Rapport : §P1-3
 
-- [ ] **QWEN-P1-6** : mDNS publishing manuel fragile
+- [x] **QWEN-P1-6** : mDNS publishing manuel fragile
   - `_buildMdnsResponse()` construit des paquets DNS binaires à la main — risque de corruption silencieuse
   - Impact : découverte d'appareils unreliable sur certains réseaux
+  - ✅ **FIXÉ** : Retry logic (2 tentatives) + catch SocketException
   - 📄 Rapport : §P1-6
 
 ### 🟡 P2 — Modéré
