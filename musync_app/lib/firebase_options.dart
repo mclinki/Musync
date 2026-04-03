@@ -21,7 +21,7 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyCt8pJsHrkKt9IMC0egWrHLDCcfj9bUip8',
+    apiKey: 'AIzaSyAy5Qxwtc68WCbnTmo44KIvBIEXPmxX5f8',
     appId: '1:545311301769:android:916147c4c032e8206e2658',
     messagingSenderId: '545311301769',
     projectId: 'musync-6e5aa',
@@ -31,7 +31,7 @@ class DefaultFirebaseOptions {
   // Windows placeholder — Firebase is skipped on Windows (see firebase_service.dart)
   // To enable Firebase on Windows, replace with real app ID from Firebase Console
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyCt8pJsHrkKt9IMC0egWrHLDCcfj9bUip8',
+    apiKey: 'AIzaSyAy5Qxwtc68WCbnTmo44KIvBIEXPmxX5f8',
     appId: '1:545311301769:windows:PLACEHOLDER_REPLACE_ME',
     messagingSenderId: '545311301769',
     projectId: 'musync-6e5aa',
