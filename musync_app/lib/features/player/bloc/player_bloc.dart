@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:logger/logger.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/core.dart';
+import '../../../core/utils/format.dart';
 
 // ── Events ──
 
@@ -129,6 +132,39 @@ class _SyncingFileProgress extends PlayerEvent {
   List<Object?> get props => [fileName, isComplete];
 }
 
+class ConnectedDevicesUpdated extends PlayerEvent {
+  final List<ConnectedDeviceInfo> devices;
+  const ConnectedDevicesUpdated(this.devices);
+  @override
+  List<Object?> get props => [devices];
+}
+
+class _AllGuestsReadyUpdated extends PlayerEvent {
+  final bool ready;
+  const _AllGuestsReadyUpdated(this.ready);
+  @override
+  List<Object?> get props => [ready];
+}
+
+class _LoadSavedPlaylist extends PlayerEvent {
+  const _LoadSavedPlaylist();
+}
+
+class ToggleShuffleRequested extends PlayerEvent {
+  const ToggleShuffleRequested();
+}
+
+class ToggleRepeatRequested extends PlayerEvent {
+  const ToggleRepeatRequested();
+}
+
+class VolumeRemoteChanged extends PlayerEvent {
+  final double volume;
+  const VolumeRemoteChanged(this.volume);
+  @override
+  List<Object?> get props => [volume];
+}
+
 // ── State ──
 
 class PlayerState extends Equatable {
@@ -143,6 +179,14 @@ class PlayerState extends Equatable {
   final double? syncOffsetMs;
   /// Set of filenames currently being synced to slaves (host) or received (guest).
   final Set<String> syncingFiles;
+  /// Connected slave devices with sync info (host only).
+  final List<ConnectedDeviceInfo> connectedDevices;
+  /// Whether all connected guests have finished loading the current track.
+  final bool allGuestsReady;
+  /// Current repeat mode (off, one, all).
+  final RepeatMode repeatMode;
+  /// Whether shuffle mode is active.
+  final bool isShuffled;
 
   const PlayerState({
     this.status = PlayerStatus.idle,
@@ -155,6 +199,10 @@ class PlayerState extends Equatable {
     this.syncQualityLabel,
     this.syncOffsetMs,
     this.syncingFiles = const {},
+    this.connectedDevices = const [],
+    this.allGuestsReady = false,
+    this.repeatMode = RepeatMode.off,
+    this.isShuffled = false,
   });
 
   bool get hasNext => playlist.hasNext;
@@ -163,6 +211,7 @@ class PlayerState extends Equatable {
   PlayerState copyWith({
     PlayerStatus? status,
     AudioTrack? currentTrack,
+    bool clearCurrentTrack = false,
     Playlist? playlist,
     Duration? position,
     Duration? duration,
@@ -171,11 +220,14 @@ class PlayerState extends Equatable {
     String? syncQualityLabel,
     double? syncOffsetMs,
     Set<String>? syncingFiles,
-    bool clearTrack = false,
+    List<ConnectedDeviceInfo>? connectedDevices,
+    bool? allGuestsReady,
+    RepeatMode? repeatMode,
+    bool? isShuffled,
   }) {
     return PlayerState(
       status: status ?? this.status,
-      currentTrack: clearTrack ? null : (currentTrack ?? this.currentTrack),
+      currentTrack: clearCurrentTrack ? null : (currentTrack ?? this.currentTrack),
       playlist: playlist ?? this.playlist,
       position: position ?? this.position,
       duration: duration ?? this.duration,
@@ -184,6 +236,10 @@ class PlayerState extends Equatable {
       syncQualityLabel: syncQualityLabel ?? this.syncQualityLabel,
       syncOffsetMs: syncOffsetMs ?? this.syncOffsetMs,
       syncingFiles: syncingFiles ?? this.syncingFiles,
+      connectedDevices: connectedDevices ?? this.connectedDevices,
+      allGuestsReady: allGuestsReady ?? this.allGuestsReady,
+      repeatMode: repeatMode ?? this.repeatMode,
+      isShuffled: isShuffled ?? this.isShuffled,
     );
   }
 
@@ -199,6 +255,10 @@ class PlayerState extends Equatable {
         syncQualityLabel,
         syncOffsetMs,
         syncingFiles,
+        connectedDevices,
+        allGuestsReady,
+        repeatMode,
+        isShuffled,
       ];
 }
 
@@ -217,15 +277,21 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
   final SessionManager sessionManager;
   final FirebaseService _firebase;
   final Logger _logger;
+  final SharedPreferences? _prefs;
+  bool _isClosed = false;
   StreamSubscription? _stateSub;
+  StreamSubscription? _sessionStateSub;
   StreamSubscription? _positionSub;
   StreamSubscription? _clientEventSub;
   StreamSubscription? _syncQualitySub;
   StreamSubscription? _fileTransferSub;
+  StreamSubscription? _connectedDevicesSub;
+  StreamSubscription? _allGuestsReadySub;
 
-  PlayerBloc({required this.sessionManager, FirebaseService? firebase, Logger? logger})
+  PlayerBloc({required this.sessionManager, FirebaseService? firebase, Logger? logger, SharedPreferences? prefs})
       : _firebase = firebase ?? FirebaseService(),
         _logger = logger ?? Logger(),
+        _prefs = prefs,
         super(const PlayerState()) {
     on<LoadTrackRequested>(_onLoadTrack);
     on<AddToQueueRequested>(_onAddToQueue);
@@ -242,9 +308,16 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     on<AudioStateChanged>(_onAudioStateChanged);
     on<TrackCompleted>(_onTrackCompleted);
     on<SyncQualityUpdated>(_onSyncQualityUpdated);
+    on<ConnectedDevicesUpdated>(_onConnectedDevicesUpdated);
+    on<_AllGuestsReadyUpdated>(_onAllGuestsReadyUpdated);
+    on<_LoadSavedPlaylist>(_onLoadSavedPlaylist);
+    on<ToggleShuffleRequested>(_onToggleShuffle);
+    on<ToggleRepeatRequested>(_onToggleRepeat);
+    on<VolumeRemoteChanged>(_onVolumeRemoteChanged);
 
     // Listen to audio engine state (single subscription)
     _stateSub = sessionManager.audioEngine.stateStream.listen((audioState) {
+      if (_isClosed) return;
       add(AudioStateChanged(audioState));
       // Detect track completion: state goes to idle while we were playing
       if (audioState == AudioEngineState.idle &&
@@ -255,25 +328,33 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
 
     _positionSub =
         sessionManager.audioEngine.positionStream.listen((position) {
+      if (_isClosed) return;
       add(PositionUpdated(position));
     });
 
     // Listen to host commands (for guest mode)
+    // HIGH-012 fix: Also listen to stateStream to re-subscribe on reconnect
     _clientEventSub = sessionManager.clientEvents?.listen((event) {
-      if (event.type == ClientEventType.skipNextCommand) {
-        _logger.i('Host triggered skip next');
-        add(const SkipNextRequested());
-      } else if (event.type == ClientEventType.skipPrevCommand) {
-        _logger.i('Host triggered skip prev');
-        add(const SkipPreviousRequested());
-      } else if (event.type == ClientEventType.playlistUpdateCommand) {
-        // Playlist update handled by DiscoveryBloc
-        _logger.d('Playlist update received');
+      if (_isClosed) return;
+      _handleClientEvent(event);
+    });
+
+    _sessionStateSub = sessionManager.stateStream.listen((state) {
+      if (_isClosed) return;
+      // Re-subscribe to clientEvents when joining a new session
+      if (state == SessionManagerState.joined) {
+        _clientEventSub?.cancel();
+        _clientEventSub = sessionManager.clientEvents?.listen((event) {
+          if (_isClosed) return;
+          _handleClientEvent(event);
+        });
+        _logger.i('Re-subscribed to clientEvents after session join');
       }
     });
 
     // Listen to sync quality updates
     _syncQualitySub = sessionManager.syncQualityStream.listen((update) {
+      if (_isClosed) return;
       add(SyncQualityUpdated(
         qualityLabel: update.qualityLabel,
         offsetMs: update.offsetMs,
@@ -282,6 +363,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
 
     // Listen to file transfer progress for syncing indicators
     _fileTransferSub = sessionManager.fileTransfer.progressStream.listen((progress) {
+      if (_isClosed) return;
       add(_SyncingFileProgress(
         fileName: progress.fileName,
         isComplete: progress.percentage >= 1.0,
@@ -299,6 +381,55 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     on<_SyncingFilesChanged>((event, emit) {
       emit(state.copyWith(syncingFiles: event.files));
     });
+
+    // Listen to connected devices updates (host dashboard)
+    _connectedDevicesSub = sessionManager.connectedDevicesStream.listen((devices) {
+      if (_isClosed) return;
+      add(ConnectedDevicesUpdated(devices));
+    });
+
+    // Listen to all guests ready status
+    _allGuestsReadySub = sessionManager.allGuestsReadyStream.listen((ready) {
+      if (_isClosed) return;
+      add(_AllGuestsReadyUpdated(ready));
+    });
+
+    // Charger la playlist sauvegardée au démarrage
+    add(const _LoadSavedPlaylist());
+  }
+
+  void _onLoadSavedPlaylist(
+    _LoadSavedPlaylist event,
+    Emitter<PlayerState> emit,
+  ) {
+    final prefs = _prefs;
+    if (prefs == null) return;
+    try {
+      final playlistJson = prefs.getString('saved_playlist');
+      if (playlistJson != null) {
+        final playlist = Playlist.fromJson(
+          Map<String, dynamic>.from(jsonDecode(playlistJson)),
+        );
+        if (playlist.tracks.isNotEmpty) {
+          emit(state.copyWith(playlist: playlist));
+          _logger.i('Loaded saved playlist: ${playlist.length} tracks');
+        }
+      }
+    } catch (e) {
+      _logger.w('Failed to load saved playlist: $e');
+    }
+  }
+
+  /// Sauvegarder la playlist dans SharedPreferences.
+  void _savePlaylist() {
+    final prefs = _prefs;
+    if (prefs == null) return;
+    try {
+      final jsonStr = jsonEncode(state.playlist.toJson());
+      prefs.setString('saved_playlist', jsonStr);
+    } catch (e) {
+      _logger.w('Failed to save playlist: $e');
+    }
   }
 
   Future<void> _onLoadTrack(
@@ -321,6 +452,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
         duration: duration,
         position: Duration.zero,
       ));
+      _savePlaylist();
     } catch (e) {
       _logger.e('Failed to load track: $e');
       emit(state.copyWith(
@@ -334,14 +466,41 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     AddToQueueRequested event,
     Emitter<PlayerState> emit,
   ) async {
+    // If playlist is empty and no track is loaded, load this track as the first one
+    if (state.playlist.isEmpty && state.currentTrack == null) {
+      emit(state.copyWith(status: PlayerStatus.loading, errorMessage: null));
+      try {
+        await sessionManager.audioEngine.loadTrack(event.track);
+        final duration = await _waitForDuration();
+        final playlist = Playlist(tracks: [event.track], currentIndex: 0);
+        emit(state.copyWith(
+          currentTrack: event.track,
+          playlist: playlist,
+          status: PlayerStatus.paused,
+          duration: duration,
+          position: Duration.zero,
+        ));
+        _savePlaylist();
+        _logger.i('Loaded first track from queue add: ${event.track.title}');
+      } catch (e) {
+        _logger.e('Failed to load first track from queue add: $e');
+        emit(state.copyWith(
+          status: PlayerStatus.error,
+          errorMessage: 'Impossible de charger le fichier: $e',
+        ));
+      }
+      return;
+    }
+
     final newPlaylist = state.playlist.addTrack(event.track);
     emit(state.copyWith(playlist: newPlaylist));
+    _savePlaylist();
     _logger.i('Added to queue: ${event.track.title} (${newPlaylist.length} tracks)');
 
     // Auto-sync to slaves if host and there are connected slaves
     if (sessionManager.role == DeviceRole.host &&
         event.track.sourceType == AudioSourceType.localFile) {
-      final fileName = event.track.source.split('/').last.split('\\').last;
+      final fileName = extractFileName(event.track.source);
       // Use local variable instead of reading state after emit
       final syncing = Set<String>.from(state.syncingFiles)..add(fileName);
       emit(state.copyWith(syncingFiles: syncing));
@@ -386,11 +545,13 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
         status: newPlaylist.isEmpty ? PlayerStatus.idle : PlayerStatus.paused,
         position: Duration.zero,
       ));
+      _savePlaylist();
     } else {
       emit(state.copyWith(
         playlist: newPlaylist,
         currentTrack: newPlaylist.currentTrack,
       ));
+      _savePlaylist();
     }
   }
 
@@ -408,10 +569,11 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     }
     emit(state.copyWith(
       playlist: const Playlist(),
-      clearTrack: true,
+      clearCurrentTrack: true,
       status: PlayerStatus.idle,
       position: Duration.zero,
     ));
+    _savePlaylist();
   }
 
   Future<void> _onPlay(
@@ -438,6 +600,8 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
           await sessionManager.resumePlayback();
         } else {
           await sessionManager.audioEngine.play();
+          // Notify host that guest resumed (SYNC 2 fix)
+          sessionManager.sendToHost(ProtocolMessage.guestResume());
         }
       } else {
         // Fresh play: sync to slaves and play from start
@@ -466,6 +630,9 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
         await sessionManager.pausePlayback();
       } else {
         await sessionManager.audioEngine.pause();
+        // Notify host that guest paused (SYNC 2 fix)
+        final positionMs = sessionManager.audioEngine.position.inMilliseconds;
+        sessionManager.sendToHost(ProtocolMessage.guestPause(positionMs: positionMs));
       }
       emit(state.copyWith(status: PlayerStatus.paused));
     } catch (e, stack) {
@@ -516,7 +683,9 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
       _logger.i('Guest skip next: waiting for host play command');
       try {
         await sessionManager.audioEngine.pause();
-      } catch (_) {}
+      } catch (e) {
+        _logger.d('Guest skip next pause failed: $e');
+      }
       emit(state.copyWith(status: PlayerStatus.loading));
       return;
     }
@@ -527,6 +696,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
       currentTrack: nextTrack,
       position: Duration.zero,
     ));
+    _savePlaylist();
 
     try {
       await sessionManager.audioEngine.loadTrack(nextTrack);
@@ -574,7 +744,9 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
       _logger.i('Guest skip prev: waiting for host play command');
       try {
         await sessionManager.audioEngine.pause();
-      } catch (_) {}
+      } catch (e) {
+        _logger.d('Guest skip prev pause failed: $e');
+      }
       emit(state.copyWith(status: PlayerStatus.loading));
       return;
     }
@@ -585,6 +757,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
       currentTrack: prevTrack,
       position: Duration.zero,
     ));
+    _savePlaylist();
 
     try {
       await sessionManager.audioEngine.loadTrack(prevTrack);
@@ -629,6 +802,10 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     try {
       await sessionManager.audioEngine.setVolume(event.volume);
       emit(state.copyWith(volume: event.volume));
+      // Broadcast volume to slaves if host
+      if (sessionManager.role == DeviceRole.host) {
+        await sessionManager.broadcastVolume(event.volume);
+      }
     } catch (e, stack) {
       _logger.e('Set volume failed: $e');
       _firebase.recordError(e, stack, reason: 'volumeChanged');
@@ -682,10 +859,61 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     Emitter<PlayerState> emit,
   ) async {
     _logger.i('Track completed, checking for next...');
-    final nextPlaylist = state.playlist.skipNext();
+    final playlist = state.playlist;
+    final currentIndex = playlist.currentIndex;
+
+    if (playlist.repeatMode == RepeatMode.one) {
+      _logger.i('Repeat one: replaying current track');
+      emit(state.copyWith(status: PlayerStatus.playing, position: Duration.zero));
+      try {
+        await sessionManager.audioEngine.seek(Duration.zero);
+        if (sessionManager.role == DeviceRole.host) {
+          await sessionManager.playTrack(
+            playlist.tracks[currentIndex],
+            playlist: playlist,
+          );
+        } else {
+          await sessionManager.audioEngine.play();
+        }
+      } catch (e) {
+        _logger.e('Repeat one replay failed: $e');
+        emit(state.copyWith(status: PlayerStatus.idle));
+      }
+      return;
+    }
+
+    final nextPlaylist = playlist.skipNext();
     if (nextPlaylist != null) {
       _logger.i('Auto-advancing to next track');
       add(const SkipNextRequested());
+    } else if (playlist.repeatMode == RepeatMode.all) {
+      _logger.i('Repeat all: looping au début');
+      final loopedPlaylist = playlist.copyWith(currentIndex: 0);
+      final firstTrack = loopedPlaylist.tracks[0];
+      emit(state.copyWith(
+        playlist: loopedPlaylist,
+        currentTrack: firstTrack,
+        status: PlayerStatus.loading,
+        position: Duration.zero,
+      ));
+      _savePlaylist();
+      try {
+        await sessionManager.audioEngine.loadTrack(firstTrack);
+        final duration = await _waitForDuration();
+        if (sessionManager.role == DeviceRole.host) {
+          await sessionManager.playTrack(firstTrack, playlist: loopedPlaylist);
+        } else {
+          await sessionManager.audioEngine.play();
+        }
+        emit(state.copyWith(
+          status: PlayerStatus.playing,
+          duration: duration,
+          position: Duration.zero,
+        ));
+      } catch (e) {
+        _logger.e('Repeat all loop failed: $e');
+        emit(state.copyWith(status: PlayerStatus.idle, position: Duration.zero));
+      }
     } else {
       _logger.i('No more tracks in queue, stopping');
       emit(state.copyWith(status: PlayerStatus.idle, position: Duration.zero));
@@ -700,6 +928,92 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
       syncQualityLabel: event.qualityLabel,
       syncOffsetMs: event.offsetMs,
     ));
+  }
+
+  void _onConnectedDevicesUpdated(
+    ConnectedDevicesUpdated event,
+    Emitter<PlayerState> emit,
+  ) {
+    emit(state.copyWith(connectedDevices: event.devices));
+  }
+
+  void _onAllGuestsReadyUpdated(
+    _AllGuestsReadyUpdated event,
+    Emitter<PlayerState> emit,
+  ) {
+    emit(state.copyWith(allGuestsReady: event.ready));
+  }
+
+  void _onToggleShuffle(
+    ToggleShuffleRequested event,
+    Emitter<PlayerState> emit,
+  ) {
+    if (state.playlist.tracks.length <= 1) return;
+
+    final currentTrack = state.currentTrack;
+    final newPlaylist = state.isShuffled
+        ? state.playlist.copyWith(isShuffled: false)
+        : state.playlist.shuffle();
+
+    if (newPlaylist != null && currentTrack != null) {
+      final newIndex = newPlaylist.tracks.indexWhere((t) => t.id == currentTrack.id);
+      final adjustedIndex = newIndex >= 0 ? newIndex : 0;
+      emit(state.copyWith(
+        playlist: newPlaylist.copyWith(currentIndex: adjustedIndex),
+        isShuffled: !state.isShuffled,
+      ));
+      _logger.i('Shuffle ${state.isShuffled ? "disabled" : "enabled"}');
+      _savePlaylist();
+
+      if (sessionManager.role == DeviceRole.host) {
+        _broadcastPlaylistUpdate();
+      }
+    } else if (newPlaylist != null) {
+      emit(state.copyWith(
+        playlist: newPlaylist,
+        isShuffled: !state.isShuffled,
+      ));
+      _logger.i('Shuffle ${state.isShuffled ? "disabled" : "enabled"}');
+      _savePlaylist();
+
+      if (sessionManager.role == DeviceRole.host) {
+        _broadcastPlaylistUpdate();
+      }
+    }
+  }
+
+  void _onToggleRepeat(
+    ToggleRepeatRequested event,
+    Emitter<PlayerState> emit,
+  ) {
+    final newPlaylist = state.playlist.toggleRepeat();
+    emit(state.copyWith(playlist: newPlaylist, repeatMode: newPlaylist.repeatMode));
+    _logger.i('Repeat mode: ${newPlaylist.repeatMode.name}');
+    _savePlaylist();
+  }
+
+  void _onVolumeRemoteChanged(
+    VolumeRemoteChanged event,
+    Emitter<PlayerState> emit,
+  ) {
+    emit(state.copyWith(volume: event.volume));
+    sessionManager.audioEngine.setVolume(event.volume);
+    _logger.i('Remote volume set to: ${event.volume}');
+  }
+
+  void _broadcastPlaylistUpdate() {
+    final playlist = state.playlist;
+    sessionManager.broadcastPlaylistUpdate(
+      tracks: playlist.tracks.map((t) => {
+        'title': t.title,
+        'artist': t.artist,
+        'source': t.source,
+        'sourceType': t.sourceType.name,
+      }).toList(),
+      currentIndex: playlist.currentIndex,
+      repeatMode: playlist.repeatMode.name,
+      isShuffled: playlist.isShuffled,
+    );
   }
 
   /// Waits for the audio engine's duration to become available after loading.
@@ -724,13 +1038,35 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     }
   }
 
+  /// Handle client events from host (HIGH-012 fix: extracted for re-subscription)
+  void _handleClientEvent(ClientEvent event) {
+    if (event.type == ClientEventType.skipNextCommand) {
+      _logger.i('Host triggered skip next');
+      add(const SkipNextRequested());
+    } else if (event.type == ClientEventType.skipPrevCommand) {
+      _logger.i('Host triggered skip prev');
+      add(const SkipPreviousRequested());
+    } else if (event.type == ClientEventType.volumeControlCommand) {
+      final volume = event.volume ?? 1.0;
+      _logger.i('Remote volume command: $volume');
+      add(VolumeRemoteChanged(volume));
+    } else if (event.type == ClientEventType.playlistUpdateCommand) {
+      // Playlist update handled by DiscoveryBloc
+      _logger.d('Playlist update received');
+    }
+  }
+
   @override
   Future<void> close() {
+    _isClosed = true;
     _stateSub?.cancel();
+    _sessionStateSub?.cancel();
     _positionSub?.cancel();
     _clientEventSub?.cancel();
     _syncQualitySub?.cancel();
     _fileTransferSub?.cancel();
+    _connectedDevicesSub?.cancel();
+    _allGuestsReadySub?.cancel();
     return super.close();
   }
 }

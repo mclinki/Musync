@@ -73,6 +73,15 @@ class ClockSyncEngine {
   DateTime? _previousCalibration;
   double _previousOffset = 0;
 
+  // Kalman filter state
+  double _kalmanOffset = 0;     // Estimated offset (ms)
+  double _kalmanDrift = 0;      // Estimated drift (ms/s)
+  double _kalmanP00 = 100.0;    // Covariance: offset uncertainty
+  double _kalmanP01 = 0.0;      // Covariance: offset-drift cross
+  double _kalmanP10 = 0.0;      // Covariance: drift-offset cross
+  double _kalmanP11 = 10.0;     // Covariance: drift uncertainty
+  bool _kalmanInitialized = false;
+
   // Sample history for drift calculation
   final Queue<ClockSample> _samples = Queue();
   final Queue<double> _offsetHistory = Queue();
@@ -162,12 +171,49 @@ class ClockSyncEngine {
   }
 
   /// Start automatic periodic calibration.
+  /// Uses adaptive intervals based on sync quality:
+  /// - Stable (jitter < 5ms):  15s interval (save battery/bandwidth)
+  /// - Normal (jitter 5-15ms): 10s interval
+  /// - Unstable (jitter > 15ms): 3s interval (recover quickly)
+  /// - Critical (jitter > 30ms): 1s interval (degraded mode)
   void startAutoCalibration({Duration interval = const Duration(milliseconds: AppConstants.autoCalibrationIntervalMs)}) {
     stopAutoCalibration();
-    _calibrationTimer = Timer.periodic(interval, (_) async {
+    _baseCalibrationInterval = interval;
+    _scheduleAdaptiveCalibration();
+    _logger.i('Adaptive auto-calibration started');
+  }
+
+  Duration _baseCalibrationInterval = Duration(milliseconds: AppConstants.autoCalibrationIntervalMs);
+
+  void _scheduleAdaptiveCalibration() {
+    _calibrationTimer?.cancel();
+
+    final nextInterval = _computeAdaptiveInterval();
+
+    _calibrationTimer = Timer(nextInterval, () async {
+      // MED-003 fix: Check timer is still active BEFORE and AFTER async calibrate()
+      if (_calibrationTimer == null) return;
       await calibrate();
+      if (_calibrationTimer != null) {
+        _scheduleAdaptiveCalibration();
+      }
     });
-    _logger.i('Auto-calibration started (interval: ${interval.inSeconds}s)');
+
+    _logger.d('Next calibration in ${nextInterval.inMilliseconds}ms (jitter: ${_jitterMs.toStringAsFixed(1)}ms)');
+  }
+
+  Duration _computeAdaptiveInterval() {
+    if (!isCalibrated) return const Duration(seconds: 3); // First calibration: fast
+
+    if (_jitterMs < 5) {
+      return const Duration(seconds: 15); // Stable: relax
+    } else if (_jitterMs < 15) {
+      return _baseCalibrationInterval; // Normal: use base (10s)
+    } else if (_jitterMs < 30) {
+      return const Duration(seconds: 3); // Unstable: fast recovery
+    } else {
+      return const Duration(seconds: 1); // Critical: aggressive
+    }
   }
 
   /// Stop automatic calibration.
@@ -196,6 +242,25 @@ class ClockSyncEngine {
     processSyncResponse(sample);
   }
 
+  /// Check if recalibration is urgently needed based on predicted drift.
+  /// Returns true if estimated drift since last calibration exceeds [thresholdMs].
+  bool needsRecalibration({double thresholdMs = 5.0}) {
+    if (!isCalibrated) return true;
+    final elapsedSec = (DateTime.now().millisecondsSinceEpoch - _lastCalibration!.millisecondsSinceEpoch) / 1000.0;
+    final predictedDrift = _driftPpm * elapsedSec / 1000.0; // ppm * seconds / 1000 = ms
+    return predictedDrift.abs() > thresholdMs;
+  }
+
+  /// Force immediate recalibration (e.g., when playback drift detected).
+  /// Returns true if calibration succeeded.
+  Future<bool> forceRecalibrate() async {
+    _logger.w('Force recalibration requested');
+    // Reset Kalman confidence to be more responsive
+    _kalmanP00 = 100.0;
+    _kalmanP11 = 10.0;
+    return await calibrate();
+  }
+
   /// Dispose resources.
   void dispose() {
     stopAutoCalibration();
@@ -214,40 +279,104 @@ class ClockSyncEngine {
       return;
     }
 
-    // Step 2: Calculate new offset (median of filtered samples)
+    // Step 2: Calculate raw offset (median of filtered samples)
     final offsets = filtered.map((s) => s.offset).toList()..sort();
-    final newOffset = _median(offsets);
+    final rawOffset = _median(offsets);
 
     // Step 3: Calculate jitter (standard deviation of offsets)
     final mean = offsets.reduce((a, b) => a + b) / offsets.length;
     final variance = offsets.map((o) => (o - mean) * (o - mean)).reduce((a, b) => a + b) / offsets.length;
-    final newJitter = sqrt(variance);
+    final rawJitter = sqrt(variance);
 
-    // Step 4: Calculate drift if we have previous calibration
+    // Step 4: Apply Kalman filter for smoother, more accurate estimation
     final now = DateTime.now();
-    if (_lastCalibration != null && _previousCalibration != null) {
-      final elapsedSec = (now.millisecondsSinceEpoch - _previousCalibration!.millisecondsSinceEpoch) / 1000.0;
-      if (elapsedSec > 1.0) { // At least 1 second to avoid division by near-zero
-        final offsetChange = newOffset - _previousOffset;
-        // Drift in ppm (parts per million)
-        _driftPpm = (offsetChange / elapsedSec) * 1000.0;
-      }
-    }
+    final elapsedSec = _lastCalibration != null
+        ? (now.millisecondsSinceEpoch - _lastCalibration!.millisecondsSinceEpoch) / 1000.0
+        : 1.0;
 
-    // Step 5: Update state
+    _kalmanFilterUpdate(rawOffset, rawJitter, elapsedSec);
+
+    // Step 5: Calculate drift from Kalman estimate
+    _driftPpm = _kalmanDrift * 1000.0; // Convert ms/s to ppm
+
+    // Step 6: Update state with Kalman-filtered values
     _previousCalibration = _lastCalibration;
     _previousOffset = _offsetMs;
-    _offsetMs = newOffset;
-    _jitterMs = newJitter;
+    _offsetMs = _kalmanOffset;
+    _jitterMs = rawJitter;
     _sampleCount = filtered.length;
     _lastCalibration = now;
 
     _logger.i(
-      'Calibration complete: offset=${_offsetMs.toStringAsFixed(2)}ms, '
+      'Calibration complete: offset=${_offsetMs.toStringAsFixed(2)}ms '
+      '(raw=${rawOffset.toStringAsFixed(2)}ms), '
       'drift=${_driftPpm.toStringAsFixed(4)}ppm, '
       'jitter=${_jitterMs.toStringAsFixed(2)}ms, '
       'samples=${filtered.length}/${samples.length}',
     );
+  }
+
+  /// Kalman filter update for clock offset and drift estimation.
+  ///
+  /// State vector: [offset_ms, drift_ms_per_sec]
+  /// The filter models clock behavior as:
+  ///   offset(t+dt) = offset(t) + drift * dt + process_noise
+  ///
+  /// This provides smoother estimates than raw median, especially
+  /// when network jitter is high.
+  void _kalmanFilterUpdate(double measuredOffset, double measurementNoise, double dt) {
+    // Measurement noise (R): based on observed jitter, min 1ms
+    final R = max(measurementNoise * measurementNoise, 1.0);
+
+    if (!_kalmanInitialized) {
+      // First measurement: initialize state
+      _kalmanOffset = measuredOffset;
+      _kalmanDrift = 0;
+      _kalmanP00 = R;
+      _kalmanP01 = 0;
+      _kalmanP10 = 0;
+      _kalmanP11 = 10.0;
+      _kalmanInitialized = true;
+      return;
+    }
+
+    // ── Predict step ──
+    // State prediction: offset += drift * dt
+    _kalmanOffset += _kalmanDrift * dt;
+
+    // Process noise: how much we expect the real system to deviate from model
+    // Higher = more responsive but noisier
+    final Q00 = 0.5 * dt * dt;  // Offset process noise
+    final Q01 = 0.5 * dt;       // Cross noise
+    final Q10 = 0.5 * dt;
+    final Q11 = 1.0 * dt;       // Drift process noise (ppm can change)
+
+    // Covariance prediction: P = F * P * F^T + Q
+    // F = [[1, dt], [0, 1]]
+    final p00 = _kalmanP00 + dt * (_kalmanP10 + _kalmanP01) + dt * dt * _kalmanP11 + Q00;
+    final p01 = _kalmanP01 + dt * _kalmanP11 + Q01;
+    final p10 = _kalmanP10 + dt * _kalmanP11 + Q10;
+    final p11 = _kalmanP11 + Q11;
+
+    // ── Update step ──
+    // Measurement model: we directly observe offset (H = [1, 0])
+    // Innovation: y = measurement - predicted
+    final innovation = measuredOffset - _kalmanOffset;
+
+    // Kalman gain: K = P * H^T * (H * P * H^T + R)^(-1)
+    final S = p00 + R;  // Innovation covariance
+    final K0 = p00 / S; // Gain for offset
+    final K1 = p10 / S; // Gain for drift
+
+    // State update
+    _kalmanOffset += K0 * innovation;
+    _kalmanDrift += K1 * innovation;
+
+    // Covariance update: P = (I - K * H) * P
+    _kalmanP00 = (1 - K0) * p00;
+    _kalmanP01 = (1 - K0) * p01;
+    _kalmanP10 = -K1 * p00 + p10;
+    _kalmanP11 = -K1 * p01 + p11;
   }
 
   /// Filter outliers using the Interquartile Range (IQR) method.

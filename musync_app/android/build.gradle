@@ -3,7 +3,7 @@
 // Ajoutez la ligne classpath pour Firebase.
 
 buildscript {
-    ext.kotlin_version = '2.1.0'
+    ext.kotlin_version = '2.2.0'
     repositories {
         google()
         mavenCentral()

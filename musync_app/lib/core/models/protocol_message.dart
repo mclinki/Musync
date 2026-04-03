@@ -44,6 +44,13 @@ enum MessageType {
   apkTransferOffer,   // Host offers to send APK (with version info)
   apkTransferAccept,  // Slave accepts APK transfer
   apkTransferDecline, // Slave declines APK transfer
+
+  // Guest playback state
+  guestPause,         // Guest notifies host that it paused locally
+  guestResume,        // Guest notifies host that it resumed locally
+
+  // Volume control
+  volumeControl,      // Host broadcasts volume to slaves
 }
 
 /// A message in the MusyncMIMO protocol.
@@ -68,20 +75,43 @@ class ProtocolMessage {
   }
 
   factory ProtocolMessage.decode(String data) {
-    final decoded = jsonDecode(data);
-    if (decoded is! Map<String, dynamic>) {
-      return ProtocolMessage(type: MessageType.error, payload: {});
+    try {
+      // Validate message size (1MB max)
+      if (data.length > 1024 * 1024) {
+        return ProtocolMessage(
+          type: MessageType.error,
+          payload: {'message': 'Message too large'},
+        );
+      }
+      final decoded = jsonDecode(data);
+      if (decoded is! Map<String, dynamic>) {
+        return ProtocolMessage(type: MessageType.error, payload: {'message': 'Invalid message format'});
+      }
+      final map = decoded;
+
+      // Validate 'type' field
+      final typeStr = map['type'];
+      if (typeStr is! String) {
+        return ProtocolMessage(type: MessageType.error, payload: {'message': 'Missing message type'});
+      }
+
+      final rawPayload = map['payload'];
+      return ProtocolMessage(
+        type: MessageType.values.firstWhere(
+          (e) => e.name == typeStr,
+          orElse: () => MessageType.error,
+        ),
+        payload: rawPayload is Map ? Map<String, dynamic>.from(rawPayload) : {},
+        timestampMs: (map['ts'] as num?)?.toInt() ?? 0,
+      );
+    } catch (e) {
+      // MED-004: Include truncated raw data for debugging
+      final preview = data.length > 100 ? '${data.substring(0, 100)}...' : data;
+      return ProtocolMessage(type: MessageType.error, payload: {
+        'message': 'Decode error: $e',
+        'raw_preview': preview,
+      });
     }
-    final map = decoded;
-    final rawPayload = map['payload'];
-    return ProtocolMessage(
-      type: MessageType.values.firstWhere(
-        (e) => e.name == map['type'],
-        orElse: () => MessageType.error,
-      ),
-      payload: rawPayload is Map ? Map<String, dynamic>.from(rawPayload) : {},
-      timestampMs: (map['ts'] as num?)?.toInt() ?? 0,
-    );
   }
 
   // ── Factory constructors for each message type ──
@@ -218,12 +248,16 @@ class ProtocolMessage {
   factory ProtocolMessage.playlistUpdate({
     required List<Map<String, dynamic>> tracks,
     required int currentIndex,
+    String? repeatMode,
+    bool? isShuffled,
   }) {
     return ProtocolMessage(
       type: MessageType.playlistUpdate,
       payload: {
         'tracks': tracks,
         'current_index': currentIndex,
+        if (repeatMode != null) 'repeat_mode': repeatMode,
+        if (isShuffled != null) 'is_shuffled': isShuffled,
       },
     );
   }
@@ -241,6 +275,7 @@ class ProtocolMessage {
     required int fileSizeBytes,
     required int totalChunks,
     required int chunkSizeBytes,
+    String? transferId,
   }) {
     return ProtocolMessage(
       type: MessageType.fileTransferStart,
@@ -249,6 +284,7 @@ class ProtocolMessage {
         'file_size_bytes': fileSizeBytes,
         'total_chunks': totalChunks,
         'chunk_size_bytes': chunkSizeBytes,
+        if (transferId != null) 'transfer_id': transferId,
       },
     );
   }
@@ -298,6 +334,26 @@ class ProtocolMessage {
       payload: {
         'reason': reason ?? 'Declined by user',
       },
+    );
+  }
+
+  // Guest playback state
+  factory ProtocolMessage.guestPause({required int positionMs}) {
+    return ProtocolMessage(
+      type: MessageType.guestPause,
+      payload: {'position_ms': positionMs},
+    );
+  }
+
+  factory ProtocolMessage.guestResume() {
+    return ProtocolMessage(type: MessageType.guestResume);
+  }
+
+  // Volume control
+  factory ProtocolMessage.volumeControl({required double volume}) {
+    return ProtocolMessage(
+      type: MessageType.volumeControl,
+      payload: {'volume': volume},
     );
   }
 }

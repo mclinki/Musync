@@ -23,7 +23,7 @@ const int kMdnsPort = AppConstants.mdnsPort;
 class DeviceDiscovery {
   final Logger _logger;
   final String deviceId;
-  final String deviceName;
+  String deviceName;
   final String deviceType;
 
   final StreamController<DeviceInfo> _deviceController =
@@ -167,9 +167,36 @@ class DeviceDiscovery {
         'pseudo',
       ];
 
-      bool isVirtual(String name) {
+      bool isVirtualName(String name) {
         final lower = name.toLowerCase();
         return virtualPatterns.any((p) => lower.contains(p));
+      }
+
+      /// Returns true if the IP belongs to a known virtual subnet.
+      /// - 192.168.56.x : VirtualBox Host-Only
+      /// - 172.16-31.x  : Docker / Hyper-V default ranges
+      /// - 10.0.x.x     : often VPN / VM (only if adapter name is virtual)
+      bool isVirtualIp(String ip) {
+        return ip.startsWith('192.168.56.') ||
+            ip.startsWith('172.17.') ||
+            ip.startsWith('172.18.') ||
+            ip.startsWith('172.19.') ||
+            ip.startsWith('172.20.') ||
+            ip.startsWith('172.21.') ||
+            ip.startsWith('172.22.') ||
+            ip.startsWith('172.23.') ||
+            ip.startsWith('172.24.') ||
+            ip.startsWith('172.25.') ||
+            ip.startsWith('172.26.') ||
+            ip.startsWith('172.27.') ||
+            ip.startsWith('172.28.') ||
+            ip.startsWith('172.29.') ||
+            ip.startsWith('172.30.') ||
+            ip.startsWith('172.31.');
+      }
+
+      bool isVirtual(String name, String ip) {
+        return isVirtualName(name) || isVirtualIp(ip);
       }
 
       // Preferred real adapter patterns
@@ -177,8 +204,8 @@ class DeviceDiscovery {
 
       // First pass: look for known real adapters, excluding virtual ones
       for (final interface in interfaces) {
-        if (isVirtual(interface.name)) continue;
         for (final addr in interface.addresses) {
+          if (isVirtual(interface.name, addr.address)) continue;
           if (realPatterns.any((p) => interface.name.toLowerCase().contains(p))) {
             return addr.address;
           }
@@ -187,8 +214,8 @@ class DeviceDiscovery {
 
       // Second pass: any non-virtual, non-loopback address
       for (final interface in interfaces) {
-        if (isVirtual(interface.name)) continue;
         for (final addr in interface.addresses) {
+          if (isVirtual(interface.name, addr.address)) continue;
           if (!addr.isLoopback) {
             return addr.address;
           }
@@ -632,7 +659,9 @@ class DeviceDiscovery {
       if (results.isNotEmpty) {
         return results.first.address;
       }
-    } catch (_) {}
+    } catch (e) {
+      _logger.d('Hostname resolution failed for $hostname: $e');
+    }
     return null;
   }
 
@@ -742,7 +771,9 @@ class DeviceDiscovery {
     } finally {
       try {
         await socket?.close();
-      } catch (_) {}
+      } catch (e) {
+        _logger.d('Socket close error during probe: $e');
+      }
     }
   }
 }

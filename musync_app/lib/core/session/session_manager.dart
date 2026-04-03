@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/services.dart';
 import 'package:logger/logger.dart';
 import '../app_constants.dart';
 import '../models/models.dart';
@@ -7,6 +8,8 @@ import '../network/websocket_server.dart';
 import '../network/websocket_client.dart';
 import '../network/device_discovery.dart';
 import '../audio/audio_engine.dart';
+import '../context/event_store.dart';
+import '../context/context_manager.dart';
 import '../services/file_transfer_service.dart';
 import '../services/foreground_service.dart';
 import '../services/firebase_service.dart';
@@ -24,10 +27,12 @@ class SessionManager {
   final Logger _logger;
 
   // Components
-  late DeviceDiscovery _discovery;
+  DeviceDiscovery? _discovery;
   late final AudioEngine _audioEngine;
   late final FileTransferService _fileTransfer;
   late final ForegroundService _foregroundService;
+  late final EventStore _eventStore;
+  late final ContextManager _contextManager;
 
   WebSocketServer? _server;
   WebSocketClient? _client;
@@ -50,11 +55,23 @@ class SessionManager {
       StreamController.broadcast();
   final StreamController<SyncQualityUpdate> _syncQualityController =
       StreamController.broadcast();
-  final StreamController<ApkTransferOffer> _apkTransferOfferController =
+  final StreamController<List<ConnectedDeviceInfo>> _connectedDevicesController =
+      StreamController.broadcast();
+  final StreamController<bool> _allGuestsReadyController =
       StreamController.broadcast();
 
   // Subscriptions
   final List<StreamSubscription> _subscriptions = [];
+
+  // Periodic connected devices update timer (host side)
+  Timer? _connectedDevicesTimer;
+
+  // Post-connection recalibration timer (slave side)
+  Timer? _recalibrationTimer;
+
+  /// Whether the session manager has been fully initialized.
+  bool _isInitialized = false;
+  bool get isInitialized => _isInitialized;
 
   // Cached file path for slave playback
   String? _cachedFilePath;
@@ -66,11 +83,25 @@ class SessionManager {
     _audioEngine = AudioEngine(logger: _logger);
     _fileTransfer = FileTransferService(logger: _logger);
     _foregroundService = ForegroundService(logger: _logger);
+    _eventStore = EventStore(logger: _logger);
+    _contextManager = ContextManager(eventStore: _eventStore, logger: _logger);
   }
 
   /// Set the Firebase service for analytics tracking (optional).
   void setFirebaseService(FirebaseService service) {
     _firebase = service;
+  }
+
+  /// Update the device name at runtime (e.g., after user changes it in settings).
+  /// Updates discovery component and local device info.
+  void updateDeviceName(String name) {
+    if (_discovery != null) {
+      _discovery!.deviceName = name;
+    }
+    if (_localDevice != null) {
+      _localDevice = _localDevice!.copyWith(name: name);
+    }
+    _logger.i('Device name updated to: $name');
   }
 
   // ── Public API ──
@@ -93,6 +124,9 @@ class SessionManager {
   /// File transfer service.
   FileTransferService get fileTransfer => _fileTransfer;
 
+  /// Context manager for event sourcing and state snapshots.
+  ContextManager get contextManager => _contextManager;
+
   /// Stream of state changes.
   Stream<SessionManagerState> get stateStream => _stateController.stream;
 
@@ -110,14 +144,49 @@ class SessionManager {
   Stream<SyncQualityUpdate> get syncQualityStream =>
       _syncQualityController.stream;
 
-  /// Stream of APK transfer offers (for slave-side UI).
-  Stream<ApkTransferOffer> get apkTransferOfferStream =>
-      _apkTransferOfferController.stream;
+  /// Stream of connected devices with sync info (for host dashboard).
+  Stream<List<ConnectedDeviceInfo>> get connectedDevicesStream =>
+      _connectedDevicesController.stream;
+
+  /// Stream that emits true when all connected slaves have finished loading
+  /// the current track (isSynced = true), false otherwise.
+  Stream<bool> get allGuestsReadyStream => _allGuestsReadyController.stream;
 
   /// Discovered devices.
-  Map<String, DeviceInfo> get discoveredDevices => _discovery.discoveredDevices;
+  Map<String, DeviceInfo> get discoveredDevices =>
+      _discovery?.discoveredDevices ?? const {};
+
+  /// Get list of connected slave devices with sync info (host only).
+  List<ConnectedDeviceInfo> getConnectedDevices() {
+    if (_server == null) return [];
+    return _server!.slaves.values.map((slave) {
+      // Find matching device info from session
+      final deviceInfo = _currentSession?.slaves.firstWhere(
+        (d) => d.id == slave.deviceId,
+        orElse: () => DeviceInfo(
+          id: slave.deviceId,
+          name: slave.deviceName,
+          type: DeviceType.unknown,
+          ip: '',
+          port: 0,
+          discoveredAt: slave.connectedAt,
+        ),
+      );
+      return ConnectedDeviceInfo(
+        deviceId: slave.deviceId,
+        deviceName: slave.deviceName,
+        deviceType: deviceInfo?.type ?? DeviceType.unknown,
+        ip: deviceInfo?.ip ?? '',
+        clockOffsetMs: slave.clockOffsetMs,
+        isSynced: slave.isSynced,
+        connectedAt: slave.connectedAt,
+        lastHeartbeat: slave.lastHeartbeat,
+      );
+    }).toList();
+  }
 
   /// Initialize the session manager.
+  /// Each step is isolated so one failure doesn't block the rest.
   Future<void> initialize({
     required String deviceId,
     required String deviceName,
@@ -144,22 +213,41 @@ class SessionManager {
     );
 
     // Get local IP
-    _localIp = await _discovery.getLocalIp();
-    if (_localIp != null) {
-      _localDevice = _localDevice!.copyWith(ip: _localIp!);
-      _logger.i('Local IP: $_localIp');
+    try {
+      _localIp = await _discovery!.getLocalIp();
+      if (_localIp != null) {
+        _localDevice = _localDevice!.copyWith(ip: _localIp!);
+        _logger.i('Local IP: $_localIp');
+      }
+    } catch (e) {
+      _logger.w('Failed to resolve local IP (non-critical): $e');
     }
 
-    // Initialize audio engine
-    await _audioEngine.initialize();
+    // Initialize audio engine (may fail on Windows/desktop)
+    try {
+      await _audioEngine.initialize();
+    } catch (e) {
+      _logger.w('Failed to initialize audio engine (non-critical): $e');
+    }
 
     // Initialize file transfer service
-    await _fileTransfer.initialize();
+    try {
+      await _fileTransfer.initialize();
+    } catch (e) {
+      _logger.w('Failed to initialize file transfer (non-critical): $e');
+    }
+
+    // Initialize event store for context management
+    try {
+      await _eventStore.initialize();
+    } catch (e) {
+      _logger.w('Failed to initialize event store (non-critical): $e');
+    }
 
     // Listen to discovered devices
     _subscriptions.add(
-      _discovery.devices.listen((device) {
-        _devicesController.add(_discovery.discoveredDevices.values.toList());
+      _discovery!.devices.listen((device) {
+        _devicesController.add(_discovery!.discoveredDevices.values.toList());
 
         final elapsed = DateTime.now().difference(device.discoveredAt).inMilliseconds;
         _firebase?.logDeviceDiscovered(
@@ -170,12 +258,16 @@ class SessionManager {
     );
 
     _emitState(SessionManagerState.idle);
+    _isInitialized = true;
     _logger.i('SessionManager initialized');
   }
 
   /// Start hosting a session.
   /// This device becomes the host and starts accepting connections.
   Future<String> hostSession({int port = kDefaultPort}) async {
+    if (!_isInitialized) {
+      throw Exception('SessionManager not initialized. Call initialize() first.');
+    }
     if (_role != DeviceRole.none) {
       throw Exception('Already in a session');
     }
@@ -199,13 +291,30 @@ class SessionManager {
     );
 
     // Start publishing via mDNS
-    await _discovery.startPublishing(port: port);
+    await _discovery?.startPublishing(port: port);
 
     _role = DeviceRole.host;
     _emitState(SessionManagerState.hosting);
 
+    // Initialize context for this session
+    _contextManager.initContext(_currentSession!.sessionId);
+    await _contextManager.recordEvent(SessionEvent(
+      sessionId: _currentSession!.sessionId,
+      type: EventType.sessionCreated,
+      timestamp: DateTime.now(),
+    ));
+
     // Start foreground service to keep app alive in background
     await _foregroundService.start(title: 'MusyncMIMO - Groupe actif');
+
+    // Start periodic connected devices updates for host dashboard
+    _connectedDevicesTimer?.cancel();
+    _connectedDevicesTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _emitConnectedDevices(),
+    );
+    // Emit initial state
+    _emitConnectedDevices();
 
     _firebase?.logSessionStart(
       sessionId: _currentSession!.sessionId,
@@ -222,6 +331,10 @@ class SessionManager {
     required String hostIp,
     int hostPort = kDefaultPort,
   }) async {
+    if (!_isInitialized) {
+      _logger.e('Cannot join session: SessionManager not initialized');
+      return false;
+    }
     if (_role != DeviceRole.none) {
       throw Exception('Already in a session');
     }
@@ -257,6 +370,23 @@ class SessionManager {
 
     // Start auto-calibration to keep clocks in sync
     _client!.clockSync.startAutoCalibration();
+
+    // BUG-8 FIX: Do a second calibration after network stabilizes (3s)
+    // Initial calibration may be noisy right after connection
+    // Use cancellable Timer instead of Future.delayed (CRIT-005 fix)
+    _recalibrationTimer?.cancel();
+    _recalibrationTimer = Timer(const Duration(seconds: 3), () async {
+      if (_client != null && _client!.isConnected) {
+        _logger.i('Running post-connection recalibration...');
+        try {
+          await _client!.synchronize();
+          _emitSyncQuality();
+        } catch (e) {
+          _logger.w('Post-connection recalibration failed: $e');
+        }
+      }
+      _recalibrationTimer = null;
+    });
 
     // Emit sync quality
     _emitSyncQuality();
@@ -313,7 +443,7 @@ class SessionManager {
       if (sent) {
         _logger.i('File sent successfully to all slaves');
         // Send just the filename so slaves can find it in their cache
-        trackSource = track.source.split('/').last.split('\\').last;
+        trackSource = extractFileName(track.source);
         _logger.i('Broadcasting filename: $trackSource');
         
         // Reduced wait time for slaves to save the file
@@ -356,6 +486,14 @@ class SessionManager {
       startedAt: DateTime.now(),
     );
 
+    // Record playback event for context
+    await _contextManager.recordEvent(SessionEvent(
+      sessionId: _currentSession?.sessionId ?? '',
+      type: EventType.playbackStarted,
+      data: {'track': track.toJson()},
+      timestamp: DateTime.now(),
+    ));
+
     _firebase?.logTrackPlay(
       trackTitle: track.title,
       sourceType: track.sourceType.name,
@@ -392,6 +530,15 @@ class SessionManager {
     await _server!.broadcastPause(positionMs: positionMs);
 
     _currentSession = _currentSession?.copyWith(state: SessionState.paused);
+
+    // Record pause event for context
+    await _contextManager.recordEvent(SessionEvent(
+      sessionId: _currentSession?.sessionId ?? '',
+      type: EventType.playbackPaused,
+      data: {'position_ms': positionMs},
+      timestamp: DateTime.now(),
+    ));
+
     _emitState(SessionManagerState.paused);
   }
 
@@ -404,15 +551,21 @@ class SessionManager {
       throw Exception('Server not initialized');
     }
 
-    final track = _currentSession?.currentTrack;
-    if (track == null) return;
+    // BUG-7 FIX: Fall back to audio engine's current track if session track is null
+    // (happens on first play after loadTrack, since only BLoC state has the track)
+    AudioTrack? track = _currentSession?.currentTrack;
+    track ??= _audioEngine.currentTrack;
+    if (track == null) {
+      _logger.w('resumePlayback: no track to resume');
+      return;
+    }
 
     final positionMs = _audioEngine.position.inMilliseconds;
 
     // Use filename for local files (guests have the file in cache by filename)
     String trackSource = track.source;
     if (track.sourceType == AudioSourceType.localFile) {
-      trackSource = track.source.split('/').last.split('\\').last;
+      trackSource = extractFileName(track.source);
     }
 
     await _server!.broadcastPlay(
@@ -425,8 +578,35 @@ class SessionManager {
     await Future.delayed(Duration(milliseconds: delayMs));
     await _audioEngine.play();
 
-    _currentSession = _currentSession?.copyWith(state: SessionState.playing);
+    _currentSession = _currentSession?.copyWith(
+      state: SessionState.playing,
+      currentTrack: track,
+    );
+
+    // Record resume event for context
+    await _contextManager.recordEvent(SessionEvent(
+      sessionId: _currentSession?.sessionId ?? '',
+      type: EventType.playbackResumed,
+      timestamp: DateTime.now(),
+    ));
+
     _emitState(SessionManagerState.playing);
+  }
+
+  /// Broadcast playlist update to slaves (shuffle/repeat changes).
+  void broadcastPlaylistUpdate({
+    required List<Map<String, dynamic>> tracks,
+    required int currentIndex,
+    String? repeatMode,
+    bool? isShuffled,
+  }) {
+    if (_role != DeviceRole.host || _server == null || _server!.slaveCount == 0) return;
+    _server!.broadcastPlaylistUpdate(
+      tracks: tracks,
+      currentIndex: currentIndex,
+      repeatMode: repeatMode,
+      isShuffled: isShuffled,
+    );
   }
 
   /// Sync a track to slaves without playing it (host only).
@@ -445,7 +625,7 @@ class SessionManager {
     );
 
     if (sent) {
-      trackSource = track.source.split('/').last.split('\\').last;
+      trackSource = extractFileName(track.source);
       _logger.i('File sent, broadcasting prepare for: $trackSource');
       // Wait for slaves to save the file before sending prepare
       await Future.delayed(const Duration(milliseconds: AppConstants.fileTransferWaitDelayMs));
@@ -458,9 +638,30 @@ class SessionManager {
     }
   }
 
+  /// Rename the current session (host only).
+  Future<void> renameSession(String name) async {
+    if (_role != DeviceRole.host) {
+      throw Exception('Only the host can rename the session');
+    }
+    if (_currentSession == null) {
+      throw Exception('No active session to rename');
+    }
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) {
+      throw Exception('Session name cannot be empty');
+    }
+    _currentSession = _currentSession!.copyWith(name: trimmed);
+    _logger.i('Session renamed to: $trimmed');
+  }
+
   /// Leave the current session.
   Future<void> leaveSession() async {
     _logger.i('Leaving session...');
+
+    // Create context snapshot before leaving
+    if (_contextManager.hasContext) {
+      await _contextManager.createSnapshot();
+    }
 
     // Log session end before clearing state
     if (_currentSession != null) {
@@ -474,7 +675,7 @@ class SessionManager {
 
     if (_role == DeviceRole.host) {
       await _server?.stop();
-      await _discovery.stopPublishing();
+      await _discovery?.stopPublishing();
       _server = null;
     } else if (_role == DeviceRole.slave) {
       await _client?.disconnect();
@@ -485,6 +686,14 @@ class SessionManager {
     _syncQualityTimer?.cancel();
     _syncQualityTimer = null;
 
+    // Cancel post-connection recalibration timer (CRIT-005 fix)
+    _recalibrationTimer?.cancel();
+    _recalibrationTimer = null;
+
+    // Cancel periodic connected devices timer
+    _connectedDevicesTimer?.cancel();
+    _connectedDevicesTimer = null;
+
     await _audioEngine.stop();
 
     // Reset cached state
@@ -493,8 +702,13 @@ class SessionManager {
     // Stop foreground service
     await _foregroundService.stop();
 
+    // Stop device discovery scanning (HIGH-011 fix)
+    await _discovery?.stopScanning();
+    await _discovery?.stopPublishing();
+
     _role = DeviceRole.none;
     _currentSession = null;
+    _contextManager.clearContext();
     _emitState(SessionManagerState.idle);
 
     _logger.i('Left session');
@@ -502,14 +716,18 @@ class SessionManager {
 
   /// Start scanning for available sessions.
   Future<void> startScanning() async {
-    await _discovery.startScanning();
+    if (!_isInitialized) {
+      _logger.w('Cannot start scanning: SessionManager not initialized');
+      return;
+    }
+    await _discovery?.startScanning();
     // Also try subnet scan as fallback
-    await _discovery.scanSubnet();
+    await _discovery?.scanSubnet();
   }
 
   /// Stop scanning.
   Future<void> stopScanning() async {
-    await _discovery.stopScanning();
+    await _discovery?.stopScanning();
   }
 
   /// Broadcast a message to all connected slaves (host only).
@@ -530,6 +748,24 @@ class SessionManager {
     await _server!.sendToSlave(deviceId, message);
   }
 
+  /// Send a message to the host (slave only).
+  void sendToHost(ProtocolMessage message) {
+    if (_client == null) {
+      _logger.w('Cannot send to host: not a slave');
+      return;
+    }
+    _client!.sendMessage(message);
+  }
+
+  /// Broadcast volume to all connected slaves (host only).
+  Future<void> broadcastVolume(double volume) async {
+    if (_role != DeviceRole.host || _server == null) {
+      _logger.w('Cannot broadcast volume: not hosting');
+      return;
+    }
+    await _server!.broadcastVolume(volume: volume);
+  }
+
   /// Dispose all resources.
   Future<void> dispose() async {
     for (final sub in _subscriptions) {
@@ -537,15 +773,21 @@ class SessionManager {
     }
     _subscriptions.clear();
 
+    _connectedDevicesTimer?.cancel();
+    _syncQualityTimer?.cancel();
+
     await leaveSession();
-    await _discovery.dispose();
+    await _discovery?.dispose();
     await _audioEngine.dispose();
     await _fileTransfer.dispose();
+    await _contextManager.dispose();
+    await _eventStore.dispose();
     await _stateController.close();
     await _devicesController.close();
     await _playlistUpdateController.close();
     await _syncQualityController.close();
-    await _apkTransferOfferController.close();
+    await _connectedDevicesController.close();
+    await _allGuestsReadyController.close();
   }
 
   // ── Event Handlers ──
@@ -554,6 +796,7 @@ class SessionManager {
     switch (event.type) {
       case ServerEventType.deviceConnected:
         _logger.i('Device connected: ${event.deviceName}');
+        _onGuestJoinedNotification();
         _currentSession = _currentSession?.addSlave(
           DeviceInfo(
             id: event.deviceId,
@@ -564,21 +807,38 @@ class SessionManager {
             discoveredAt: DateTime.now(),
           ),
         );
+        unawaited(_contextManager.recordEvent(SessionEvent(
+          sessionId: _currentSession?.sessionId ?? '',
+          type: EventType.deviceJoined,
+          data: {'device_id': event.deviceId, 'device_name': event.deviceName},
+          timestamp: DateTime.now(),
+        )));
+        _checkAllGuestsReady();
         _emitState(SessionManagerState.hosting);
         break;
       case ServerEventType.deviceDisconnected:
         _logger.i('Device disconnected: ${event.deviceName}');
         _currentSession = _currentSession?.removeSlave(event.deviceId);
+        _checkAllGuestsReady();
         _emitState(SessionManagerState.hosting);
         break;
       case ServerEventType.deviceReady:
         _logger.i('Device ready: ${event.deviceName}');
+        _checkAllGuestsReady();
         break;
       case ServerEventType.messageReceived:
         // Binary messages are handled by the file transfer service
         if (event.data is List<int>) {
           _handleServerBinaryMessage(event.deviceId, event.data as List<int>);
         }
+        break;
+      case ServerEventType.guestPaused:
+        _logger.i('Guest ${event.deviceName} paused at ${event.data}ms');
+        // TODO: Broadcast pause to other slaves or adjust sync
+        break;
+      case ServerEventType.guestResumed:
+        _logger.i('Guest ${event.deviceName} resumed playback');
+        // TODO: Broadcast resume to other slaves or adjust sync
         break;
       case ServerEventType.error:
         _logger.e('Server error: ${event.reason}');
@@ -635,7 +895,8 @@ class SessionManager {
         _handleFileTransferBinary(event);
         break;
       case ClientEventType.apkTransferOffer:
-        _handleApkTransferOffer(event);
+        // APK transfer is now handled via HTTP server, not WebSocket
+        _logger.d('Ignoring APK transfer offer (now handled via HTTP)');
         break;
       case ClientEventType.disconnected:
         _logger.i('Disconnected from host');
@@ -653,6 +914,9 @@ class SessionManager {
       case ClientEventType.reconnecting:
         _logger.w('Reconnecting to host: ${event.message}');
         _emitState(SessionManagerState.scanning);
+        break;
+      case ClientEventType.volumeControlCommand:
+        // Volume control is handled by PlayerBloc directly
         break;
     }
   }
@@ -701,7 +965,7 @@ class SessionManager {
     }
 
     final track = event.sourceType == AudioSourceType.localFile
-        ? AudioTrack.fromFilePath(trackSource)
+        ? await AudioTrack.fromFilePathWithMetadata(trackSource)
         : AudioTrack.fromUrl(trackSource);
 
     // Preload the track for faster playback
@@ -784,7 +1048,7 @@ class SessionManager {
     }
 
     final track = event.sourceType == AudioSourceType.localFile
-        ? AudioTrack.fromFilePath(trackSource)
+        ? await AudioTrack.fromFilePathWithMetadata(trackSource)
         : AudioTrack.fromUrl(trackSource);
 
     _logger.i('Creating AudioTrack: ${track.title}');
@@ -809,6 +1073,17 @@ class SessionManager {
     // Convert host's startAtMs to local time using clock offset
     int delayMs = 0;
     if (event.startAtMs != null) {
+      // BUG-8 FIX: Do a quick sync exchange before computing delay
+      // to get the freshest clock offset (initial calibration may be stale)
+      if (_client != null && _client!.isConnected) {
+        try {
+          await _client!.synchronize();
+          _logger.d('Pre-play sync completed, offset: ${_client!.clockSync.stats.offsetMs}ms');
+        } catch (e) {
+          _logger.w('Pre-play sync failed, using existing offset: $e');
+        }
+      }
+
       final clockOffsetMs = _client?.clockSync.stats.offsetMs ?? 0;
       final localStartAtMs = event.startAtMs! - clockOffsetMs.round();
       delayMs = localStartAtMs - DateTime.now().millisecondsSinceEpoch;
@@ -871,7 +1146,7 @@ class SessionManager {
       try {
         final file = File(result);
         if (await file.exists()) {
-          final track = AudioTrack.fromFilePath(result);
+          final track = await AudioTrack.fromFilePathWithMetadata(result);
           await _audioEngine.preloadTrack(track);
           _logger.i('Auto-preloaded track after file transfer: ${track.title}');
         }
@@ -910,7 +1185,7 @@ class SessionManager {
       try {
         final file = File(result);
         if (await file.exists()) {
-          final track = AudioTrack.fromFilePath(result);
+          final track = await AudioTrack.fromFilePathWithMetadata(result);
           await _audioEngine.preloadTrack(track);
           _logger.i('Auto-preloaded track after file transfer: ${track.title}');
         }
@@ -918,50 +1193,6 @@ class SessionManager {
         _logger.w('Auto-preload after transfer failed (non-critical): $e');
       }
     }
-  }
-
-  Future<void> _handleApkTransferOffer(ClientEvent event) async {
-    if (event.protocolMessage == null) {
-      _logger.w('Received APK transfer offer with null protocolMessage');
-      return;
-    }
-
-    final version = event.protocolMessage!.payload['version'] as String? ?? '';
-    final fileSizeBytes = (event.protocolMessage!.payload['file_size_bytes'] as num?)?.toInt() ?? 0;
-
-    _logger.i('=== APK TRANSFER OFFER RECEIVED ===');
-    _logger.i('Version: $version');
-    _logger.i('Size: ${formatBytes(fileSizeBytes)}');
-
-    // Emit event for UI to handle (show dialog to accept/decline)
-    _apkTransferOfferController.add(ApkTransferOffer(
-      version: version,
-      fileSizeBytes: fileSizeBytes,
-    ));
-  }
-
-  /// Accept APK transfer from host.
-  Future<void> acceptApkTransfer() async {
-    if (_client == null) {
-      _logger.w('Cannot accept APK transfer: not connected');
-      return;
-    }
-
-    _logger.i('Accepting APK transfer');
-    final acceptMsg = ProtocolMessage.apkTransferAccept();
-    _client!.sendMessage(acceptMsg);
-  }
-
-  /// Decline APK transfer from host.
-  Future<void> declineApkTransfer({String? reason}) async {
-    if (_client == null) {
-      _logger.w('Cannot decline APK transfer: not connected');
-      return;
-    }
-
-    _logger.i('Declining APK transfer: ${reason ?? "user declined"}');
-    final declineMsg = ProtocolMessage.apkTransferDecline(reason: reason);
-    _client!.sendMessage(declineMsg);
   }
 
   Future<void> _handlePauseCommand(ClientEvent event) async {
@@ -1009,6 +1240,31 @@ class SessionManager {
       jitterMs: stats.jitterMs,
       quality: stats.qualityLabel,
     );
+  }
+
+  /// Emit connected devices list for host dashboard.
+  void _emitConnectedDevices() {
+    if (_role != DeviceRole.host || _server == null) return;
+    final devices = getConnectedDevices();
+    _connectedDevicesController.add(devices);
+  }
+
+  /// Check if all connected slaves have finished loading the current track
+  /// and emit the result on allGuestsReadyStream.
+  void _checkAllGuestsReady() {
+    if (_role != DeviceRole.host || _server == null) return;
+    final slaves = _server!.slaves;
+    if (slaves.isEmpty) {
+      _allGuestsReadyController.add(true);
+      return;
+    }
+    final allReady = slaves.values.every((s) => s.isSynced);
+    _allGuestsReadyController.add(allReady);
+  }
+
+  /// Trigger haptic feedback to notify the host that a guest has joined.
+  void _onGuestJoinedNotification() {
+    unawaited(HapticFeedback.lightImpact());
   }
 }
 

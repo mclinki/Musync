@@ -27,7 +27,6 @@
         android:label="MusyncMIMO"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:usesCleartextTraffic="true"
         android:enableOnBackInvokedCallback="true">
 
         <!-- Required for mDNS on local network -->

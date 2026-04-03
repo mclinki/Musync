@@ -1,8 +1,91 @@
 # MusyncMIMO — Backlog de Tâches
 
-## 🔥 Bugs Crashlytics — v0.1.14 (282 events, 7 users)
+> **Pour les agents IA** : Lis `AGENT_ONBOARDING.md` avant de travailler ici.
+> **Conventions** : `[x]` fait, `[ ]` à faire. Priorités : P0 critique, P1 important, P2 confort, P3 futur.
 
-> Source : Firebase Crashlytics API — 7 derniers jours (25 mars → 1 avril 2026)
+---
+
+## 🏗️ Architecture Agentique — Guide de Bonnes Pratiques
+
+> Tâches issues du `GUIDE_BONNES_PRATIQUES.md` — Implémentation progressive.
+
+### P1 — Fondations (à faire en premier)
+
+- [x] **AGENT-1** : Créer le modèle `SessionContext` versionné
+  - Fichier : `core/models/session_context.dart` (nouveau)
+  - Implémenter le schéma v2 avec migration automatique v1→v2
+  - ✅ **FAIT** (v0.1.20) : SessionContext avec Equatable, toJson/fromJson, migration progressive, copyWith, summary
+  - Réf : `GUIDE_BONNES_PRATIQUES.md` §4.2
+
+- [x] **AGENT-2** : Créer l'`EventStore` (SQLite) pour l'Event Sourcing léger
+  - Fichier : `core/context/event_store.dart` (nouveau)
+  - Stocker les événements de session + snapshots
+  - ✅ **FAIT** (v0.1.20) : EventStore SQLite avec tables session_events + context_snapshots, append/query/snapshot
+  - Réf : `GUIDE_BONNES_PRATIQUES.md` §1.2.1
+
+- [x] **AGENT-3** : Créer le `ContextManager` (orchestrateur de contexte)
+  - Fichier : `core/context/context_manager.dart` (nouveau)
+  - API : `recordEvent()`, `createSnapshot()`, `restoreContext()`, `getContextSummary()`
+  - ✅ **FAIT** (v0.1.20) : ContextManager avec initContext, recordEvent, createSnapshot, restoreContext, getContextSummary
+  - Réf : `GUIDE_BONNES_PRATIQUES.md` §4.3
+
+- [x] **AGENT-4** : Intégrer le `ContextManager` dans `SessionManager`
+  - Fichier : `core/session/session_manager.dart`
+  - Émettre des événements de contexte à chaque action significative
+  - ✅ **FAIT** (v0.1.20) : Events sessionCreated, playbackStarted, playbackPaused, playbackResumed, deviceJoined + snapshot sur leaveSession
+  - Réf : `GUIDE_BONNES_PRATIQUES.md` §4.1
+
+### P2 — Sécurité
+
+- [ ] **AGENT-5** : Implémenter l'authentification JWT pour les sessions
+  - Fichier : `core/auth/auth_service.dart` (nouveau)
+  - Génération, vérification, refresh de tokens
+  - Réf : `GUIDE_BONNES_PRATIQUES.md` §3.1.1
+
+- [ ] **AGENT-6** : Créer le `TokenManager` avec refresh automatique
+  - Fichier : `core/auth/token_manager.dart` (nouveau)
+  - Refresh 5 min avant expiration, préservation du contexte
+  - Réf : `GUIDE_BONNES_PRATIQUES.md` §3.2.3
+
+- [ ] **AGENT-7** : Ajouter la signature HMAC des messages de protocole
+  - Fichier : `core/auth/message_signer.dart` (nouveau)
+  - Intégrer dans `ProtocolMessage.withSignature()`
+  - Réf : `GUIDE_BONNES_PRATIQUES.md` §3.2.2
+
+### P2 — Robustesse
+
+- [ ] **AGENT-8** : Implémenter la reprise automatique avec backoff exponentiel
+  - Fichier : `core/context/auto_recovery_manager.dart` (nouveau)
+  - Backoff 1s → 2s → 4s → 8s → 16s → 30s (max)
+  - Réf : `GUIDE_BONNES_PRATIQUES.md` §5.6
+
+- [ ] **AGENT-9** : Ajouter le message `contextSync` au protocole WebSocket
+  - Fichiers : `protocol_message.dart`, `websocket_server.dart`, `websocket_client.dart`
+  - Diffusion du contexte complet lors de la reconnexion
+  - Réf : `GUIDE_BONNES_PRATIQUES.md` §2.4
+
+- [ ] **AGENT-10** : Créer l'`AgentContextInterface` (API simplifiée pour agents IA)
+  - Fichier : `core/context/agent_context_interface.dart` (nouveau)
+  - `getSummary()`, `getAvailableActions()`, `executeAction()`
+  - Réf : `GUIDE_BONNES_PRATIQUES.md` §5.7
+
+### P3 — Tests & Qualité
+
+- [ ] **AGENT-11** : Tests d'intégration pour la reprise de contexte
+  - Fichier : `test/context_resume_test.dart` (nouveau)
+  - Scénario : déconnexion → reconnexion → contexte restauré
+  - Réf : `GUIDE_BONNES_PRATIQUES.md` §5.4
+
+- [ ] **AGENT-12** : Tests de migration de schéma (v1 → v2)
+  - Fichier : `test/context_schema_test.dart` (nouveau)
+  - Vérifier que les anciens contextes sont migrés correctement
+  - Réf : `GUIDE_BONNES_PRATIQUES.md` §5.1
+
+---
+
+## 🔥 Bugs Crashlytics — v0.1.14 → v0.1.21 (311 events, 12 users)
+
+> Source : Firebase Crashlytics API — 7 derniers jours (27 mars → 3 avril 2026)
 
 ### 🔴 P0 — Critique
 
@@ -82,25 +165,37 @@
 
 ### 🔴 P0 — Critique (nouveaux — 2026-04-01)
 
-- [ ] **CRASH-10** : `InheritedElement.debugDeactivated` — assertion `_dependents.isEmpty` failed
+- [x] **CRASH-10** : `InheritedElement.debugDeactivated` — assertion `_dependents.isEmpty` failed
   - 47 events · 7 users · 12 sessions · **FATAL**
   - Signal : répétitif (7x/user), fresh (3 jours)
   - Fichier : `framework.dart` → `InheritedElement.debugDeactivated`
   - Stack : Overlay/LabeledGlobalKey → widget tree corrompu par dépendants orphelins
-  - Cause probable : liens de dépendance InheritedWidget non nettoyés lors de la déactivation d'éléments (cascade de CRASH-2/CRASH-3)
-  - Dernière version : v0.1.14 (toujours actif !)
+  - Cause : stream listeners appelaient `add()` sur BLoC après `close()` → corruption widget tree
+  - ✅ **FIXÉ** (v0.1.19) : Guards `_isClosed` sur TOUS les stream listeners dans `DiscoveryBloc` (6) et `PlayerBloc` (6) + flag `_isClosed = true` dans `close()`
+  - Fichiers : `discovery_bloc.dart`, `player_bloc.dart`
   - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/d4d49198d79d5f30aa15fd9045a6ad77)
 
 ### 🟠 P1 — Important (nouveaux — 2026-04-01)
 
-- [ ] **CRASH-11** : `RenderFlex.performLayout` — children have non-zero flex but unbounded height constraints
+- [x] **CRASH-11** : `RenderFlex.performLayout` — children have non-zero flex but unbounded height constraints
   - 3 events · 2 users · 3 sessions · **FATAL**
   - Signal : fresh (hier)
   - Fichier : `flex.dart` → `RenderFlex.performLayout`
   - Stack : Column dans un scrollable sans hauteur finie → Expanded/Flexible sans contrainte
   - Cause probable : Column avec Expanded dans un parent scrollable (même pattern que CRASH-1 mais vue différente)
+  - ✅ **FIXÉ** (v0.1.18) : `mainAxisSize: MainAxisSize.min` ajouté sur 12 Column dans discovery_screen.dart (6), settings_screen.dart (2), player_screen.dart (2), position_slider.dart (1), host_dashboard.dart (1)
   - Dernière version : v0.1.13
   - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/9505a8fcbbb01ff432f4019f7ec597fb)
+
+### 🟠 P1 — Important (nouveaux — 2026-04-03)
+
+- [ ] **CRASH-12** : `Asset 'shaders/ink_sparkle.frag' not found`
+  - 9 events · 2 users · 6 sessions · **FATAL**
+  - Signal : fresh (apparu aujourd'hui, v0.1.21)
+  - Fichier : `dart:async` → `._startMicrotaskLoop`
+  - Cause probable : shader `ink_sparkle.frag` (effet Material 3 Sparkle) non inclus dans le build Android. Flutter 3.27+ utilise ce shader par défaut pour les effets de ripple/progress, mais il doit être déclaré dans `pubspec.yaml` sous `shaders:` ou désactivé via `use_material3: false`
+  - Fix suggéré : ajouter `shaders: [shaders/ink_sparkle.frag]` dans `pubspec.yaml` OU désactiver l'effet sparkle dans le thème
+  - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/19900f8e3cfd0416d5201d7aef703ec8)
 
 ---
 
@@ -270,8 +365,9 @@
 ## Tâches en attente (non bloquantes)
 
 ### Sécurité
-- [ ] **SÉCURITÉ 1** : Implémenter WebSocket chiffré (wss://) au lieu de ws://
-  - Nécessite un certificat TLS ou un mécanisme de chiffrement applicatif
+- [x] **SÉCURITÉ 1** : Implémenter WebSocket chiffré (wss://) au lieu de ws://
+  - ✅ **FAIT** v0.1.24 : Certificat auto-signé RSA 2048 via `basic_utils`, `HttpServer.bindSecure`, client `wss://` avec `badCertificateCallback`
+  - `usesCleartextTraffic` retiré du manifest Android
   - Priorité : Moyenne (important pour la production)
 
 - [ ] **SÉCURITÉ 2** : Ajouter authentification entre appareils
@@ -303,37 +399,41 @@
   - ✅ **FIXÉ** : Timer cleanup 10s + timeout 30s pour transferts inactifs
   - Priorité : Moyenne
 
-- [ ] **BUG 5** : Afficher le nom de l'hôte pendant la connexion
+- [x] **BUG 5** : Afficher le nom de l'hôte pendant la connexion
   - `_buildJoiningView` ne montre pas à quel appareil on se connecte
+  - ✅ **FIXÉ** (v0.1.21) : `_buildJoiningView` prend le state, affiche `hostDevice?.name`
   - Priorité : Basse
 
 - [ ] **BUG 6** : Nom personnalisé de l'appareil non propagé lors de la découverte
   - Le nom modifié dans les paramètres est bien sauvegardé localement
   - Mais quand l'appareil passe en mode hôte, les autres appareils voient le nom système (pas le nom personnalisé)
-  - Cause probable : le mDNS broadcast ou le message de bienvenue utilise le nom device par défaut au lieu du nom custom des paramètres
-  - Fichiers suspects : `device_discovery.dart`, `websocket_server.dart`, `settings_bloc.dart`
+  - Cause : `main.dart` initialisait SessionManager avec nom hardcodé `'MusyncMIMO Device'` AVANT de charger SharedPreferences
+  - ✅ **FIXÉ** (v0.1.18) : SharedPreferences chargé AVANT SessionManager + nom lu depuis prefs + ajout `updateDeviceName()` dans SessionManager/DeviceDiscovery pour propagation runtime depuis SettingsBloc
+  - Fichiers : `main.dart`, `session_manager.dart`, `device_discovery.dart`, `settings_bloc.dart`
   - Priorité : Moyenne (UX — les utilisateurs ne reconnaissent pas leurs appareils)
 
-- [ ] **BUG 7** : Premier play ne fonctionne pas — nécessite un stop puis play
+- [x] **BUG 7** : Premier play ne fonctionne pas — nécessite un stop puis play
   - Quand un morceau est chargé pour la première fois, appuyer sur play ne déclenche rien
   - Il faut appuyer sur stop pour que le morceau se "charge" vraiment, puis rappuyer sur play
-  - Cause probable : l'audio n'est pas préparé (preload/prepare) avant le premier play, ou l'état du player n'est pas synchronisé avec l'UI
-  - Fichiers suspects : `player_bloc.dart`, `audio_engine.dart`, `session_manager.dart`
+  - Cause : `resumePlayback()` retournait early car `_currentSession?.currentTrack` était null (track seulement dans BLoC state, pas dans session state)
+  - ✅ **FIXÉ** (v0.1.18) : Fallback sur `_audioEngine.currentTrack` si session track est null + mise à jour `_currentSession` avec le track au resume
+  - Fichier : `session_manager.dart`
   - Priorité : Haute (bloque l'utilisation basique de l'app)
 
-- [ ] **BUG 8** : Synchronisation imparfaite au premier play — se corrige après pause/play
+- [x] **BUG 8** : Synchronisation imparfaite au premier play — se corrige après pause/play
   - Au premier lancement, la synchro entre appareils n'est pas optimale (décalage audible)
   - Si on fait pause puis play, la synchro s'améliore nettement
   - Parfois il faut refaire pause/play plusieurs fois pour une synchro parfaite
-  - Cause probable : le clock offset n'est pas appliqué correctement au premier play, ou la calibration auto n'a pas encore convergé au moment du lancement
-  - Fichiers suspects : `clock_sync.dart`, `session_manager.dart`, `websocket_client.dart`
+  - Cause : `defaultPlayDelayMs=3000` trop court — le slave met ~1-2s à `loadPreloaded`, le délai était écoulé avant que le slave soit prêt → `delayMs` négatif → compensation par seek
+  - ✅ **FIXÉ** (v0.1.18) : `defaultPlayDelayMs` 3000→5000ms, `resumeDelayMs` 1500→2500ms, `prepareBroadcastDelayMs` 300→500ms
+  - Fichiers : `app_constants.dart`
   - Priorité : Haute (core feature — la synchro est le but principal de l'app)
 
-- [ ] **BUG 9** : `LateInitializationError: Field '_discovery' has not been initialized`
-  - Crash quand on appuie sur "Partager l'app" dans les paramètres
-  - Cause : `SessionManager` accède à `_discovery` (late) avant `initialize()`
-  - Fix : vérifier si `_discovery` est initialisé avant d'accéder à `discoveredDevices`
-  - Fichier : `session_manager.dart` (getter `discoveredDevices`), `settings_screen.dart`
+- [x] **BUG 9** : `LateInitializationError` sur "Partager l'app"
+  - Crash quand on appuie sur "Partager l'APK" dans les paramètres
+  - Cause : race condition dans `_onApkShareStart` — `DeviceDiscovery` temporaire pouvait échouer sans fallback, pas de dispose du discovery temporaire
+  - ✅ **FIXÉ** (v0.1.18) : try-catch autour du DeviceDiscovery temporaire + `dispose()` après usage + fallback IP via `NetworkInterface.list()` si DeviceDiscovery échoue
+  - Fichier : `settings_bloc.dart`
   - Priorité : Haute (crash utilisateur)
 
 - [x] **SYNC 1** : Émettre SyncQualityChanged après chaque recalibration auto
@@ -341,8 +441,9 @@
   - ✅ **DÉJÀ FAIT** : Timer périodique 10s appelle `_emitSyncQuality()`
   - Priorité : Moyenne
 
-- [ ] **SYNC 2** : Guest pause/resume ne propage pas à l'hôte
+- [x] **SYNC 2** : Guest pause/resume ne propage pas à l'hôte
   - Le guest peut mettre en pause localement mais l'hôte ne le sait pas
+  - ✅ **FIXÉ** (v0.1.21) : Messages `guestPause`/`guestResume` ajoutés au protocole, envoyés par le guest, reçus par l'hôte
   - Priorité : Basse (comportement actuel = volume local)
 
 - [ ] **SPATIAL 1** : Spatialisation audio multi-appareils
@@ -352,6 +453,23 @@
   - Nécessite de splitter le flux audio en canaux mono par appareil
   - Impact : transforme MuSync en système surround avec des téléphones
   - Priorité : Moyenne (feature différenciante, demande du créateur)
+
+### Mise à jour
+
+- [x] **UPDATE-1** : Mise à jour via l'app (in-app update)
+  - `UpdateService` : vérifie GitHub Releases, compare versions sémantiques, télécharge APK
+  - UI Settings : bouton "Vérifier les mises à jour", carte de release notes, bouton "Télécharger" puis "Installer"
+  - Fichiers : `core/services/update_service.dart` (nouveau), `settings_bloc.dart`, `settings_screen.dart`
+  - ✅ **FAIT** (v0.1.21)
+
+### Audio / UX
+
+- [ ] **VOLUME 1** : Le slider de volume gère un volume indépendant au lieu d'être lié au volume système
+  - Actuellement : `just_audio.setVolume()` contrôle un volume interne, indépendant du volume hardware de l'appareil
+  - Résultat : l'utilisateur règle le volume dans l'app mais le volume physique de l'appareil ne change pas
+  - Fix Android : utiliser `android_volume_controller` ou le platform channel `AudioManager.setStreamVolume()`
+  - Fix Windows : `just_audio_windows` n'expose pas le volume système — nécessite un plugin natif ou `win32` interop
+  - Priorité : Moyenne (UX — les utilisateurs s'attendent à ce que le slider contrôle le volume réel)
 
 ---
 
@@ -446,13 +564,36 @@
 
 ---
 
-## ✅ Tâches P0 complétées (v0.1.3)
+## ✅ Tâches features complétées (v0.1.17)
 
-- [x] **P0-1** : Système de queue/playlist + skip next/prev
-- [x] **P0-2** : Vrai mDNS publishing (multicast_dns)
-- [x] **P0-3** : Permissions runtime Android 13+ (permission_handler)
-- [x] **FIX** : Export file_transfer_service.dart dans core.dart
+- [x] **5.8** : Dashboard host : appareils connectés + latence
+  - Implémenté le 2026-04-01
+  - Fichiers : `connected_device_info.dart` (nouveau), `host_dashboard.dart` (nouveau), `session_manager.dart`, `player_bloc.dart`, `player_screen.dart`, `discovery_bloc.dart`
+  - Affiche : nom appareil, IP, type, clock offset (ms), qualité sync (Excellent/Bon/Acceptable/Dégradé)
+  - Mise à jour automatique toutes les 2 secondes (timer côté host)
+  - Visible uniquement quand l'utilisateur est hôte
 
 ---
 
-*Dernière mise à jour : 01 Avril 2026*
+## ✅ Session P0/P1 — v0.1.21 → v0.1.24 (2026-04-03)
+
+### P0 complétées
+- [x] **1.2** : UX file d'attente — Bouton contextuel unique (charger vs ajouter) + `AddToQueueRequested` charge si playlist vide
+- [x] **2.1** : mDNS publishing — Déjà implémenté (multicast responder + TCP fallback)
+- [x] **2.2** : Permissions runtime — Déjà implémenté (`PermissionService` appelé dans `main.dart`)
+
+### P1 complétées
+- [x] **1.5** : Variables inutilisées — Audit : déjà propres
+- [x] **1.6** : print() → logger — 26 remplacements dans `analyze_sync.dart`
+- [x] **6.1** : Chiffrement WSS/TLS — Certificat auto-signé RSA 2048, `bindSecure`, `wss://` + `badCertificateCallback`
+- [x] **6.3** : Background iOS — `UIBackgroundModes` + `AVAudioSessionCategoryPlayback`
+
+### P1 restantes (vérifiées)
+- [ ] **2.3** : Parser métadonnées ID3 — ❌ Aucun package ID3, titre = nom de fichier uniquement
+- [ ] **2.4** : Persistance playlist — ❌ Playlist en mémoire uniquement, perdue au redémarrage
+- [ ] **4.1** : BLoC Groups — ❌ Dossier `features/groups/` n'existe pas
+- [ ] **4.2** : UI Groups — ❌ Aucun `GroupsScreen`
+
+---
+
+*Dernière mise à jour : 03 Avril 2026 (v0.1.24 — Session P0/P1 : UX file d'attente, WSS/TLS, iOS background, cleanup, backlog vérifié + Crashlytics sync : CRASH-12 ajouté)*

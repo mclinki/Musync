@@ -56,21 +56,43 @@ class _DiscoveryView extends StatelessWidget {
           FilledButton(
             onPressed: () {
               final ip = controller.text.trim();
-              if (ip.isNotEmpty) {
-                Navigator.pop(dialogContext);
-                safeDispose();
-                final device = DeviceInfo(
-                  id: ip,
-                  name: 'Appareil ($ip)',
-                  type: DeviceType.phone,
-                  ip: ip,
-                  port: kDefaultPort,
-                  discoveredAt: DateTime.now(),
+              if (ip.isEmpty) return;
+              // Validate IP format (HIGH-008 fix)
+              final ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
+              if (!ipRegex.hasMatch(ip)) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Adresse IP invalide. Format attendu : 192.168.1.100'),
+                    backgroundColor: Colors.red,
+                  ),
                 );
-                context.read<DiscoveryBloc>().add(
-                      JoinSessionRequested(device),
-                    );
+                return;
               }
+              // Validate each octet is 0-255
+              final octets = ip.split('.').map(int.parse).toList();
+              if (octets.any((o) => o < 0 || o > 255)) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Adresse IP invalide. Chaque octet doit être entre 0 et 255.'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+                return;
+              }
+              Navigator.pop(dialogContext);
+              safeDispose();
+              if (!context.mounted) return;
+              final device = DeviceInfo(
+                id: ip,
+                name: 'Appareil ($ip)',
+                type: DeviceType.phone,
+                ip: ip,
+                port: kDefaultPort,
+                discoveredAt: DateTime.now(),
+              );
+              context.read<DiscoveryBloc>().add(
+                    JoinSessionRequested(device),
+                  );
             },
             child: const Text('Connecter'),
           ),
@@ -112,7 +134,7 @@ class _DiscoveryView extends StatelessWidget {
             case DiscoveryStatus.hosting:
               return _buildHostingView(context, state);
             case DiscoveryStatus.joining:
-              return _buildJoiningView();
+              return _buildJoiningView(context, state);
             case DiscoveryStatus.joined:
               return _buildJoinedView(context);
             case DiscoveryStatus.error:
@@ -333,16 +355,17 @@ class _DiscoveryView extends StatelessWidget {
     );
   }
 
-  Widget _buildJoiningView() {
-    return const Center(
+  Widget _buildJoiningView(BuildContext context, DiscoveryState state) {
+    final hostName = state.hostDevice?.name ?? 'Hôte';
+    return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          CircularProgressIndicator(),
-          SizedBox(height: 24),
-          Text('Connexion en cours...'),
-          SizedBox(height: 8),
-          Text(
+          const CircularProgressIndicator(),
+          const SizedBox(height: 24),
+          Text('Connexion à $hostName...'),
+          const SizedBox(height: 8),
+          const Text(
             'Synchronisation des horloges',
             style: TextStyle(color: Colors.grey),
           ),
@@ -570,6 +593,7 @@ class _ConnectionStatusCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Header row
@@ -728,6 +752,7 @@ class _FileTransferCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Row(
               children: [
@@ -806,6 +831,7 @@ class _TrackInfoCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             // Album art placeholder
             Container(
@@ -957,6 +983,7 @@ class _PlaybackInfoCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             // Progress bar
             ClipRRect(
@@ -1043,6 +1070,7 @@ class _VolumeCardState extends State<_VolumeCard> {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
@@ -1112,6 +1140,7 @@ class _PlaylistCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(

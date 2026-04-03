@@ -22,6 +22,16 @@ class MainActivity : FlutterActivity() {
                         MusyncForegroundService.stop(this)
                         result.success(true)
                     }
+                    "getApkPath" -> {
+                        try {
+                            val apkPath = context.packageManager
+                                .getApplicationInfo(context.packageName, 0)
+                                .sourceDir
+                            result.success(apkPath)
+                        } catch (e: Exception) {
+                            result.error("APK_ERROR", "Failed to get APK path: ${e.message}", null)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }

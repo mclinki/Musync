@@ -2,6 +2,19 @@
 
 ## Index des documents
 
+### 🚀 Point d'entrée (obligatoire pour agents IA)
+
+| # | Document | Contenu |
+|---|----------|---------|
+| — | [Agent Onboarding](./AGENT_ONBOARDING.md) | **POINT D'ENTRÉE AGENT** — Contexte, règles, workflow, structure |
+| — | [Guide Bonnes Pratiques](./GUIDE_BONNES_PRATIQUES.md) | Patterns, sérialisation, sécurité, API, exemples de code |
+| — | [Standards de Contribution](./CONTRIBUTING.md) | Conventions Git, code, BLoC, tests, documentation |
+| — | [Backlog Tâches](./TASKS_BACKLOG.md) | Bugs ouverts + tâches en cours (mise à jour en temps réel) |
+| — | [Backlog Features](./BACKLOG_FEATURES.md) | Fonctionnalités planifiées (P0-P3) |
+| — | [Changelog](./CHANGELOG.md) | Historique complet des modifications |
+
+### 📐 Architecture & Produit
+
 | # | Document | Contenu |
 |---|----------|---------|
 | 00 | [Résumé Exécutif](./00-RESUME-EXECUTIF.md) | Vision, proposition de valeur, stack, MVP en un coup d'œil |
@@ -14,8 +27,23 @@
 | 07 | [Points de Vigilance](./07-POINTS-VIGILANCE.md) | Compatibilité, permissions, sync, batterie, sécurité, stores |
 | 08 | [Recommandations](./08-RECOMMANDATIONS.md) | Stratégie prototype, compromis, pièges à éviter, arbitrages |
 
+### 📊 Rapports
+
+| # | Document | Contenu |
+|---|----------|---------|
+| — | [Rapport J1](./RAPPORT_J1.md) | Analyse jour 1 |
+| — | [Rapport Tests](./RAPPORT_TESTS_2026-03-31.md) | Rapport de tests |
+| — | [Rapport Qwen3.6+](./Rapport_Qwen36Plus.md) | Audit externe complet |
+
 ## Comment utiliser ce document
 
+### Pour un agent IA (nouvelle session) :
+1. **Lire** l'[Agent Onboarding](./AGENT_ONBOARDING.md) — ta boussole
+2. **Lire** le [Guide Bonnes Pratiques](./GUIDE_BONNES_PRATIQUES.md) — patterns et code
+3. **Consulter** le [Backlog Tâches](./TASKS_BACKLOG.md) — ce sur quoi travailler
+4. **Respecter** les [Standards de Contribution](./CONTRIBUTING.md) — conventions
+
+### Pour un humain :
 1. **Décision Go/No-Go** : Lire le [Résumé Exécutif](./00-RESUME-EXECUTIF.md) et les [Hypothèses](./01-HYPOTHESES.md)
 2. **Comprendre le produit** : Lire l'[Analyse Produit](./02-ANALYSE-PRODUIT.md)
 3. **Concevoir l'implémentation** : Lire l'[Architecture](./03-ARCHITECTURE-TECHNIQUE.md) et la [Stack](./04-STACK-RECOMMANDEE.md)

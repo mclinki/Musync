@@ -6,12 +6,13 @@ class AppConstants {
   AppConstants._(); // Prevent instantiation
 
   // ── App Info ──────────────────────────────────────────
-  static const String appVersion = '0.1.15';
+  static const String appVersion = '0.1.35';
   static const String appName = 'MusyncMIMO';
 
   // ── Network ───────────────────────────────────────────
   static const int defaultWebSocketPort = 7890;
   static const String webSocketPath = '/musync';
+  static const bool useTls = true;
   static const String mdnsServiceType = '_musync._tcp';
   static const String mdnsMulticastAddress = '224.0.0.251';
   static const int mdnsPort = 5353;
@@ -40,6 +41,8 @@ class AppConstants {
   static const int fileTransferTimeoutSeconds = 30;
   static const int interChunkDelayMs = 10; // Delay between each chunk (ms)
   static const int interChunkDelayInterval = 1; // delay every N chunks (1 = every chunk)
+  static const int maxFileSizeBytes = 100 * 1024 * 1024; // 100MB
+  static const int maxMessageSizeBytes = 1024 * 1024; // 1MB
 
   // ── Audio ─────────────────────────────────────────────
   static const int positionUpdateIntervalMs = 200;
@@ -47,9 +50,9 @@ class AppConstants {
   static const int skipPreviousRestartThresholdSeconds = 3;
 
   // ── Session ───────────────────────────────────────────
-  static const int defaultPlayDelayMs = 3000;
-  static const int resumeDelayMs = 1500;
-  static const int prepareBroadcastDelayMs = 300;
+  static const int defaultPlayDelayMs = 5000;
+  static const int resumeDelayMs = 2500;
+  static const int prepareBroadcastDelayMs = 500;
   static const int fileTransferWaitDelayMs = 500;
   static const int fileWaitRetryCount = 10;
   static const int fileWaitRetryDelayMs = 500;
@@ -57,7 +60,7 @@ class AppConstants {
   static const int lateCompensationMaxCompensationMs = 30000;
 
   // ── Discovery ─────────────────────────────────────────
-  static const int tcpScanBatchSize = 20;
+  static const int tcpScanBatchSize = 10; // Reduced from 20 to avoid port exhaustion (MED-002 fix)
   static const int probeTimeoutMs = 800;
 
   // ── Firebase ──────────────────────────────────────────

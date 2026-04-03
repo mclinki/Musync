@@ -24,22 +24,29 @@ class _PositionSliderState extends State<PositionSlider> {
   @override
   Widget build(BuildContext context) {
     final maxMs = widget.duration?.inMilliseconds.toDouble() ?? 0.0;
+    final hasDuration = maxMs > 0;
     final currentMs = _isDragging
         ? _dragValue ?? 0.0
-        : widget.position.inMilliseconds.toDouble().clamp(0.0, maxMs > 0 ? maxMs : 1.0);
+        : widget.position.inMilliseconds.toDouble().clamp(0.0, hasDuration ? maxMs : 0.0);
 
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
         SliderTheme(
           data: SliderTheme.of(context).copyWith(
             trackHeight: 4,
             thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+            // MED-013 fix: visually disable slider when no track loaded
+            inactiveTrackColor: hasDuration
+                ? null
+                : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.1),
+            thumbColor: hasDuration ? null : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
           ),
           child: Slider(
-            value: maxMs > 0 ? currentMs.clamp(0.0, maxMs) : 0.0,
+            value: hasDuration ? currentMs.clamp(0.0, maxMs) : 0.0,
             min: 0,
-            max: maxMs > 0 ? maxMs : 1.0,
-            onChanged: maxMs > 0
+            max: hasDuration ? maxMs : 1.0,
+            onChanged: hasDuration
                 ? (value) {
                     setState(() {
                       _dragValue = value;
@@ -47,7 +54,7 @@ class _PositionSliderState extends State<PositionSlider> {
                     });
                   }
                 : null,
-            onChangeEnd: maxMs > 0
+            onChangeEnd: hasDuration
                 ? (value) {
                     setState(() {
                       _isDragging = false;

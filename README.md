@@ -8,7 +8,7 @@ Turn any collection of phones, tablets, or speakers into a synchronized multi-ro
 [![Dart](https://img.shields.io/badge/Dart-3.6-blue.svg)](https://dart.dev)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-95%2F95-passing-brightgreen.svg)](musync_app/test/)
-[![Version](https://img.shields.io/badge/Version-0.1.15-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-0.1.34-blue.svg)](CHANGELOG.md)
 
 ---
 
@@ -23,9 +23,10 @@ Turn any collection of phones, tablets, or speakers into a synchronized multi-ro
 - **Auto-reconnection** — Seamless recovery from network hiccups
 - **Background playback** — Android foreground service keeps sessions alive
 - **File transfer** — Host automatically shares local files with slaves
-- **APK transfer** — Send app to devices on network, update connected devices
+- **APK sharing** — Share app via local HTTP server: any device on the network can download and install
 - **Runtime permissions** — Android 13+ (NEARBY_WIFI_DEVICES, READ_MEDIA_AUDIO)
 - **Settings** — Theme, device name, default volume, cache management
+- **Host dashboard** — Real-time view of connected devices with sync quality and latency
 
 ---
 
@@ -33,9 +34,9 @@ Turn any collection of phones, tablets, or speakers into a synchronized multi-ro
 
 | Platform | Chemin | Statut |
 |----------|--------|--------|
-| **Android** | `musync_app/build/app/outputs/flutter-apk/app-debug.apk` | ✅ v0.1.15 |
+| **Android** | `musync_app/build/app/outputs/flutter-apk/app-debug.apk` | ✅ v0.1.34 |
 | **iOS** | Build via Xcode (`flutter build ios`) | ⚠️ Nécessite macOS |
-| **Windows** | `musync_app/build/windows/x64/Runner/Debug/` | ✅ v0.1.15 |
+| **Windows** | `musync_app/build/windows/x64/Runner/Debug/` | ✅ v0.1.34 |
 | **macOS** | Build via Xcode (`flutter build macos`) | ⚠️ Nécessite macOS |
 
 > **Note** : Les fichiers binaires ne sont pas inclus dans le dépôt GitHub (trop volumineux).
@@ -47,27 +48,45 @@ Turn any collection of phones, tablets, or speakers into a synchronized multi-ro
 
 ```
 MusyncMIMO/
-├── musync_app/
+├── 📄 DOCUMENTATION (racine)
+│   ├── AGENT_ONBOARDING.md       ← Point d'entrée agent IA
+│   ├── GUIDE_BONNES_PRATIQUES.md  ← Patterns, sécurité, API, code
+│   ├── CONTRIBUTING.md            ← Standards de contribution
+│   ├── INDEX.md                   ← Table des matières des docs
+│   ├── 00-RESUME-EXECUTIF.md      ← Vision projet
+│   ├── 01-HYPOTHESES.md           ← Hypothèses
+│   ├── 02-ANALYSE-PRODUIT.md      ← Cas d'usage, persona
+│   ├── 03-ARCHITECTURE-TECHNIQUE.md ← Architecture détaillée
+│   ├── 04-STACK-RECOMMANDEE.md    ← Stack et justifications
+│   ├── 05-MVP.md                  ← Périmètre MVP
+│   ├── 06-ROADMAP.md              ← Feuille de route
+│   ├── 07-POINTS-VIGILANCE.md     ← Risques
+│   ├── 08-RECOMMANDATIONS.md      ← Recommandations
+│   ├── TASKS_BACKLOG.md           ← Bugs + tâches en cours
+│   ├── BACKLOG_FEATURES.md        ← Features planifiées
+│   ├── CHANGELOG.md               ← Historique modifications
+│   └── README.md                  ← Ce fichier
+│
+├── 📁 musync_app/                 ← CODE SOURCE FLUTTER
 │   ├── lib/
 │   │   ├── core/
-│   │   │   ├── models/           # DeviceInfo, AudioSession, ProtocolMessage, Playlist
-│   │   │   ├── network/          # ClockSync, WebSocket, mDNS discovery
-│   │   │   ├── audio/            # AudioEngine (just_audio wrapper)
-│   │   │   ├── session/          # SessionManager (orchestrator)
-│   │   │   └── services/         # Firebase, ForegroundService, FileTransfer, Permissions
+│   │   │   ├── models/            # DeviceInfo, AudioSession, ProtocolMessage, Playlist
+│   │   │   ├── network/           # ClockSync, WebSocket, mDNS discovery
+│   │   │   ├── audio/             # AudioEngine (just_audio wrapper)
+│   │   │   ├── session/           # SessionManager (orchestrator)
+│   │   │   └── services/          # Firebase, ForegroundService, FileTransfer, Permissions
 │   │   ├── features/
-│   │   │   ├── discovery/        # Device discovery UI + BLoC
-│   │   │   ├── player/           # Audio player UI + BLoC (queue, skip)
-│   │   │   └── settings/         # Settings screen
+│   │   │   ├── discovery/         # Device discovery UI + BLoC
+│   │   │   ├── player/            # Audio player UI + BLoC (queue, skip)
+│   │   │   └── settings/          # Settings screen
 │   │   └── main.dart
-│   ├── test/                     # Unit & BLoC tests (48 tests)
-│   ├── android/                  # Android config + ForegroundService
-│   ├── ios/                      # iOS config
-│   ├── windows/                  # Windows desktop config
-│   └── macos/                    # macOS desktop config
-├── CHANGELOG.md                  # Version history
-├── TASKS_BACKLOG.md              # Remaining tasks
-└── README.md                     # This file
+│   ├── test/                      # Unit & BLoC tests (95 tests)
+│   ├── android/                   # Android config + ForegroundService
+│   ├── ios/                       # iOS config
+│   ├── windows/                   # Windows desktop config
+│   └── macos/                     # macOS desktop config
+│
+└── 📁 .git/                       # Repository Git
 ```
 
 ---
@@ -323,7 +342,7 @@ Firebase is optional — the app works without it. To enable:
        │  ◄────────────────────────────── │
        │                                  │
        │  4. NTP-like clock sync          │
-       │  ◄─────────── 8 samples ───────► │
+       │  ◄─── 8 samples + Kalman ─────► │
        │                                  │
        │  5. Transfer audio file          │
        │  ──────────────────────────────► │
@@ -338,6 +357,12 @@ Firebase is optional — the app works without it. To enable:
        └──────────────────────────────────┘
               Synchronized playback!
 ```
+
+### Sync engine (v0.1.16)
+
+- **Kalman filter** : estimates clock offset + drift continuously, ±2-3ms accuracy
+- **Adaptive calibration** : 1s (unstable) → 15s (stable) instead of fixed 10s
+- **Proactive drift detection** : `needsRecalibration()` triggers forced sync when drift > 5ms
 
 ---
 
@@ -359,11 +384,14 @@ Firebase is optional — the app works without it. To enable:
 
 | Metric | Target | Status |
 |--------|--------|--------|
-| Clock skew | < 30ms | ✅ 5-25ms on Wi-Fi 5GHz |
+| Clock skew | < 30ms | ✅ 2-15ms on Wi-Fi 5GHz (Kalman filter) |
 | Command latency | < 500ms | ✅ < 100ms on LAN |
 | Discovery time | < 5s | ✅ 2-4s via mDNS |
 | Max devices | 9 (1+8) | ✅ Tested |
-| Tests | 48/48 | ✅ All passing |
+| Tests | 95/95 | ✅ All passing |
+
+> **v0.1.16** : Clock skew improved from ±5ms to ±2-3ms thanks to Kalman filter.
+> Calibration adapts dynamically (1s-15s) instead of fixed 10s interval.
 
 ---
 
@@ -427,7 +455,7 @@ flutter analyze
 ### 🔮 v1.0
 - [ ] WSS/TLS encryption
 - [ ] Device authentication (session token)
-- [ ] Adaptive buffering
+- [x] Adaptive calibration (v0.1.16 — Kalman filter + dynamic interval)
 - [ ] iOS background audio
 - [ ] Cross-network sync (experimental)
 - [ ] IP rotation handling (DHCP renewal)
@@ -452,6 +480,19 @@ flutter analyze
 
 ## 📚 Documentation
 
+### Pour les agents IA (démarrage obligatoire)
+
+| Document | Description |
+|----------|-------------|
+| [AGENT_ONBOARDING.md](AGENT_ONBOARDING.md) | **Point d'entrée agent** — contexte, règles, workflow |
+| [GUIDE_BONNES_PRATIQUES.md](GUIDE_BONNES_PRATIQUES.md) | Patterns, sérialisation, sécurité, API, exemples de code |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Conventions Git, code, BLoC, tests, documentation |
+| [TASKS_BACKLOG.md](TASKS_BACKLOG.md) | Bugs ouverts + tâches en cours |
+| [BACKLOG_FEATURES.md](BACKLOG_FEATURES.md) | Fonctionnalités planifiées (P0-P3) |
+| [CHANGELOG.md](CHANGELOG.md) | Historique des modifications |
+
+### Architecture & Produit
+
 | Document | Description |
 |----------|-------------|
 | [00-RESUME-EXECUTIF.md](00-RESUME-EXECUTIF.md) | Executive summary |
@@ -463,7 +504,37 @@ flutter analyze
 | [06-ROADMAP.md](06-ROADMAP.md) | Development roadmap |
 | [07-POINTS-VIGILANCE.md](07-POINTS-VIGILANCE.md) | Known issues & risks |
 | [08-RECOMMANDATIONS.md](08-RECOMMANDATIONS.md) | Recommendations |
-| [RAPPORT_J1.md](RAPPORT_J1.md) | Day 1 analysis report |
+| [INDEX.md](INDEX.md) | Table des matières complète |
+
+---
+
+## 🔒 Security
+
+### Firebase Configuration
+
+Les clés Firebase (API keys, project IDs) sont sensibles et **ne doivent jamais être commitées**.
+
+- `google-services.json` et `GoogleService-Info.plist` sont exclus du `.gitignore`
+- `lib/firebase_options.dart` est également ignoré
+- Firebase est optionnel — l'app fonctionne sans
+
+**Configuration locale :**
+1. Créez un projet Firebase sur [console.firebase.google.com](https://console.firebase.google.com)
+2. Téléchargez `google-services.json` (Android) et/ou `GoogleService-Info.plist` (iOS)
+3. Placez-les dans `musync_app/android/app/` et `musync_app/ios/Runner/` respectivement
+4. Ces fichiers sont dans `.gitignore` et ne seront pas trackés par Git
+
+### Network Security
+
+- **WSS/TLS** : Chiffrement WebSocket disponible avec certificats auto-signés
+- Les communications entre devices utilisent WebSocket (port 7890 par défaut)
+- Pour activer WSS, configurez les certificats dans les paramètres du serveur
+
+### Best Practices
+
+- Ne partagez jamais vos fichiers `google-services.json` ou `GoogleService-Info.plist`
+- Si un fichier sensible a été commité par erreur, révoquez les clés Firebase concernées
+- Utilisez `git rm --cached <file>` pour retirer un fichier du suivi Git sans le supprimer localement
 
 ---
 

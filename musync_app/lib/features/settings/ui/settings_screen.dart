@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../core/core.dart';
+import '../../onboarding/ui/onboarding_screen.dart';
 import '../bloc/settings_bloc.dart';
 
 /// Settings screen for app configuration.
@@ -15,8 +17,6 @@ class SettingsScreen extends StatelessWidget {
 
 class _SettingsView extends StatelessWidget {
   const _SettingsView();
-
-  SessionManager get _sessionManager => SessionManager();
 
   @override
   Widget build(BuildContext context) {
@@ -98,6 +98,20 @@ class _SettingsView extends StatelessWidget {
 
               const Divider(height: 1),
 
+              // ── Notifications ──
+              _SectionHeader(title: 'Notifications'),
+              SwitchListTile(
+                secondary: const Icon(Icons.person_add),
+                title: const Text('Notification d\'arrivée'),
+                subtitle: const Text('Vibrer et afficher une alerte quand un invité rejoint'),
+                value: state.joinNotificationEnabled,
+                onChanged: (value) {
+                  context.read<SettingsBloc>().add(JoinNotificationToggled(value));
+                },
+              ),
+
+              const Divider(height: 1),
+
               // ── Réseau ──
               _SectionHeader(title: 'Réseau'),
               ListTile(
@@ -119,52 +133,49 @@ class _SettingsView extends StatelessWidget {
 
               // ── Partager l'application ──
               _SectionHeader(title: 'Partager l\'application'),
+              _buildApkShareSection(context, state),
+
+              const Divider(height: 1),
+
+              // ── Mise à jour ──
+              _SectionHeader(title: 'Mise à jour'),
+              _buildUpdateSection(context, state),
+
+              const Divider(height: 1),
+
+              // ── Avancé ──
+              _SectionHeader(title: 'Avancé'),
               ListTile(
-                leading: const Icon(Icons.share),
-                title: const Text('Envoyer l\'APK'),
-                subtitle: const Text('Partager l\'app avec un appareil du réseau'),
-                trailing: state.isApkTransferring
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.chevron_right),
-                onTap: state.isApkTransferring
-                    ? null
-                    : () => _showApkTransferDialog(context),
+                leading: const Icon(Icons.timer),
+                title: const Text('Délai de lecture'),
+                subtitle: Text('${state.playDelayMs}ms'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _showPlayDelayDialog(context, state.playDelayMs),
               ),
-              if (_sessionManager.role == DeviceRole.host)
-                ListTile(
-                  leading: const Icon(Icons.system_update),
-                  title: const Text('Mettre à jour les appareils'),
-                  subtitle: Text(state.apkTransferStatus ?? 'Envoyer la mise à jour aux appareils connectés'),
-                  trailing: state.isApkTransferring
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.chevron_right),
-                  onTap: state.isApkTransferring
-                      ? null
-                      : () => _confirmUpdateDevices(context),
-                ),
-              if (state.apkTransferStatus != null && !state.isApkTransferring)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Text(
-                    state.apkTransferStatus!,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
-                  ),
-                ),
+              SwitchListTile(
+                secondary: const Icon(Icons.restore),
+                title: const Text('Rejoindre automatiquement'),
+                subtitle: const Text('Rejoindre la dernière session au démarrage'),
+                value: state.autoRejoinLastSession,
+                onChanged: (value) {
+                  context.read<SettingsBloc>().add(AutoRejoinToggled(value));
+                },
+              ),
 
               const Divider(height: 1),
 
               // ── À propos ──
               _SectionHeader(title: 'À propos'),
+              ListTile(
+                leading: const Icon(Icons.help_outline),
+                title: const Text('Tutoriel'),
+                subtitle: const Text('Revoir les instructions de démarrage'),
+                onTap: () {
+                  Navigator.of(context).push(MaterialPageRoute(
+                    builder: (context) => OnboardingScreen(onComplete: () => Navigator.of(context).pop()),
+                  ));
+                },
+              ),
               ListTile(
                 leading: const Icon(Icons.info_outline),
                 title: const Text('Version'),
@@ -175,17 +186,243 @@ class _SettingsView extends StatelessWidget {
                 title: const Text('Source'),
                 subtitle: const Text('github.com/mclinki/Musync'),
                 trailing: const Icon(Icons.open_in_new, size: 18),
+                onTap: () {
+                  const url = 'https://github.com/mclinki/Musync';
+                  Clipboard.setData(const ClipboardData(text: url));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Lien copié dans le presse-papiers'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                },
               ),
               ListTile(
                 leading: const Icon(Icons.bug_report_outlined),
                 title: const Text('Signaler un problème'),
                 trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  const url = 'https://github.com/mclinki/Musync/issues';
+                  Clipboard.setData(const ClipboardData(text: url));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Lien copié dans le presse-papiers'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                },
               ),
 
               const SizedBox(height: 32),
             ],
           );
         },
+      ),
+    );
+  }
+
+  /// Build the APK share section: toggle + URL display.
+  Widget _buildApkShareSection(BuildContext context, SettingsState state) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Toggle to start/stop the share server
+        SwitchListTile(
+          secondary: const Icon(Icons.share),
+          title: const Text('Partager l\'APK'),
+          subtitle: Text(
+            state.isApkShareRunning
+                ? 'Serveur actif — partagez le lien ci-dessous'
+                : 'Démarrer un serveur pour que d\'autres appareils puissent télécharger l\'app',
+          ),
+          value: state.isApkShareRunning,
+          onChanged: (value) {
+            if (value) {
+              context.read<SettingsBloc>().add(const ApkShareStartRequested());
+            } else {
+              context.read<SettingsBloc>().add(const ApkShareStopRequested());
+            }
+          },
+        ),
+
+        // Show the share URL when server is running
+        if (state.isApkShareRunning && state.apkShareUrl != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Card(
+              color: Theme.of(context).colorScheme.primaryContainer,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.link,
+                            size: 18,
+                            color: Theme.of(context).colorScheme.onPrimaryContainer),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Lien de téléchargement',
+                          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                                color: Theme.of(context).colorScheme.onPrimaryContainer,
+                              ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    SelectableText(
+                      state.apkShareUrl!,
+                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).colorScheme.onPrimaryContainer,
+                          ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        FilledButton.tonalIcon(
+                          onPressed: () {
+                            Clipboard.setData(ClipboardData(text: state.apkShareUrl!));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Lien copié !')),
+                            );
+                          },
+                          icon: const Icon(Icons.copy, size: 18),
+                          label: const Text('Copier le lien'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Ouvrez ce lien dans le navigateur de l\'appareil cible pour télécharger et installer MusyncMIMO.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(context).colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// Build the update section: check button + download + install.
+  Widget _buildUpdateSection(BuildContext context, SettingsState state) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Check for updates button
+        ListTile(
+          leading: state.isCheckingUpdate
+              ? const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.system_update),
+          title: const Text('Vérifier les mises à jour'),
+          subtitle: state.updateInfo != null
+              ? Text('Version ${state.updateInfo!.latestVersion} disponible')
+              : null,
+          trailing: state.isCheckingUpdate ? null : const Icon(Icons.chevron_right),
+          onTap: state.isCheckingUpdate
+              ? null
+              : () {
+                  context.read<SettingsBloc>().add(const UpdateCheckRequested());
+                },
+        ),
+
+        // Show update info card when an update is available
+        if (state.updateInfo != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Card(
+              color: Theme.of(context).colorScheme.secondaryContainer,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.new_releases,
+                            size: 18,
+                            color: Theme.of(context).colorScheme.onSecondaryContainer),
+                        const SizedBox(width: 8),
+                        Text(
+                          'v${state.updateInfo!.latestVersion} — ${state.updateInfo!.fileSizeFormatted}',
+                          style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                color: Theme.of(context).colorScheme.onSecondaryContainer,
+                              ),
+                        ),
+                      ],
+                    ),
+                    if (state.updateInfo!.releaseNotes.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        state.updateInfo!.releaseNotes.length > 200
+                            ? '${state.updateInfo!.releaseNotes.substring(0, 200)}...'
+                            : state.updateInfo!.releaseNotes,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSecondaryContainer
+                                  .withValues(alpha: 0.8),
+                            ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    if (state.isDownloadingUpdate)
+                      Column(
+                        children: [
+                          LinearProgressIndicator(value: state.downloadProgress > 0 ? state.downloadProgress : null),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Téléchargement... ${(state.downloadProgress * 100).round()}%',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      )
+                    else if (state.downloadedApkPath != null)
+                      FilledButton.icon(
+                        onPressed: () {
+                          // Open the downloaded APK for installation
+                          _installApk(context, state.downloadedApkPath!);
+                        },
+                        icon: const Icon(Icons.install_mobile),
+                        label: const Text('Installer la mise à jour'),
+                      )
+                    else
+                      FilledButton.icon(
+                        onPressed: () {
+                          context.read<SettingsBloc>().add(const UpdateDownloadRequested());
+                        },
+                        icon: const Icon(Icons.download),
+                        label: const Text('Télécharger'),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// Open a downloaded APK for installation via platform channel.
+  void _installApk(BuildContext context, String apkPath) {
+    // On Android, use the install_plugin or platform channel.
+    // For now, copy the path to clipboard as a fallback.
+    Clipboard.setData(ClipboardData(text: apkPath));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Chemin de l\'APK copié. Ouvrez-le depuis votre gestionnaire de fichiers.'),
+        duration: Duration(seconds: 3),
       ),
     );
   }
@@ -324,7 +561,6 @@ class _SettingsView extends StatelessWidget {
             onPressed: () {
               context.read<SettingsBloc>().add(const CacheCleared());
               Navigator.pop(dialogContext);
-              // Use addPostFrameCallback to avoid showing snackbar during build
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -340,89 +576,48 @@ class _SettingsView extends StatelessWidget {
     );
   }
 
-  void _showApkTransferDialog(BuildContext context) {
-    final devices = _sessionManager.discoveredDevices;
-
+  void _showPlayDelayDialog(BuildContext context, int currentDelay) {
+    var delay = currentDelay.toDouble();
     showDialog(
       context: context,
-      builder: (dialogContext) => SimpleDialog(
-        title: const Text('Envoyer l\'APK'),
-        children: [
-          if (devices.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('Aucun appareil trouvé. Lancez une recherche depuis l\'écran de découverte.'),
-            )
-          else
-            ...devices.values.map((device) => SimpleDialogOption(
-                  onPressed: () {
-                    Navigator.pop(dialogContext);
-                    context.read<SettingsBloc>().add(ApkTransferToDeviceRequested(device));
-                  },
-                  child: Row(
-                    children: [
-                      Icon(
-                        device.type == DeviceType.phone
-                            ? Icons.phone_android
-                            : Icons.computer,
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(device.name),
-                            Text(
-                              '${device.ip}:${device.port}',
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                )),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              'Version: ${AppConstants.appVersion}',
-              style: Theme.of(context).textTheme.bodySmall,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Délai de lecture'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('${delay.round()}ms',
+                  style: Theme.of(context).textTheme.headlineMedium),
+              const SizedBox(height: 16),
+              Slider(
+                value: delay,
+                min: 1000,
+                max: 10000,
+                divisions: 18,
+                label: '${delay.round()}ms',
+                onChanged: (v) => setDialogState(() => delay = v),
+              ),
+              Text(
+                'Plus le délai est long, plus les esclaves ont de temps pour charger le morceau.',
+                style: Theme.of(context).textTheme.bodySmall,
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Annuler'),
             ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _confirmUpdateDevices(BuildContext context) {
-    final session = _sessionManager.currentSession;
-    if (session == null || session.slaves.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Aucun appareil connecté')),
-      );
-      return;
-    }
-
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Mettre à jour les appareils'),
-        content: Text(
-          'Envoyer la version ${AppConstants.appVersion} à ${session.slaves.length} appareil(s) connecté(s) ?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Annuler'),
-          ),
-          FilledButton(
-            onPressed: () {
-              context.read<SettingsBloc>().add(const ApkUpdateConnectedDeviceRequested());
-              Navigator.pop(dialogContext);
-            },
-            child: const Text('Envoyer'),
-          ),
-        ],
+            FilledButton(
+              onPressed: () {
+                context.read<SettingsBloc>().add(PlayDelayChanged(delay.round()));
+                Navigator.pop(dialogContext);
+              },
+              child: const Text('Enregistrer'),
+            ),
+          ],
+        ),
       ),
     );
   }

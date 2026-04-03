@@ -137,37 +137,157 @@ Hôte (horloge maître)                    Esclave (horloge esclave)
       │                                        │ Ajuste son horloge
 ```
 
-### Implémentation
+### Implémentation (v0.1.16 — Filtre de Kalman + Calibration adaptative)
+
+> **Mise à jour v0.1.16** : L'implémentation originale (médiane brute + intervalle fixe 10s)
+> a été remplacée par un filtre de Kalman + calibration adaptative.
+> Voir section [Historique](#historique-du-moteur-de-synchronisation) pour l'ancienne version.
 
 ```dart
-class ClockSync {
-  // Horloge locale ajustée
+class ClockSyncEngine {
+  // Horloge locale ajustée (avec compensation drift Kalman)
+  int get syncedTimeMs {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final elapsedSinceCalibration =
+        _lastCalibration != null ? now - _lastCalibration!.millisecondsSinceEpoch : 0;
+    final driftCorrection = _driftPpm * elapsedSinceCalibration / 1000.0;
+    return (now + _offsetMs + driftCorrection).round();
+  }
+
+  // État Kalman : offset + drift estimés
+  double _offsetMs = 0;
+  double _driftPpm = 0;      // dérive en parties par million
+  double _jitterMs = 0;      // écart-type des mesures
+
+  // État filtre de Kalman
+  double _kalmanOffset = 0;  // offset estimé (ms)
+  double _kalmanDrift = 0;   // drift estimé (ms/s)
+  double _kalmanP00 = 100.0; // covariance incertitude offset
+  double _kalmanP11 = 10.0;  // covariance incertitude drift
+
+  // Calibration adaptative (intervalle dynamique selon jitter)
+  Duration _computeAdaptiveInterval() {
+    if (_jitterMs < 5)  return Duration(seconds: 15); // Stable
+    if (_jitterMs < 15) return Duration(seconds: 10); // Normal
+    if (_jitterMs < 30) return Duration(seconds: 3);  // Instable
+    return Duration(seconds: 1);                       // Critique
+  }
+
+  // Cycle de calibration
+  Future<bool> calibrate() async {
+    final samples = <ClockSample>[];
+    for (int i = 0; i < 8; i++) {
+      final sample = await _sendSyncRequest();
+      samples.add(sample);
+      await Future.delayed(Duration(milliseconds: 50));
+    }
+    // Filtrage outliers (IQR) puis filtre de Kalman
+    final filtered = _filterOutliers(samples);
+    final rawOffset = _median(filtered.map((s) => s.offset).toList());
+    _kalmanFilterUpdate(rawOffset, jitter, elapsedSec);
+    _offsetMs = _kalmanOffset;
+    _driftPpm = _kalmanDrift * 1000.0;
+  }
+
+  // Détection proactive de dérive excessive
+  bool needsRecalibration({double thresholdMs = 5.0}) {
+    final predictedDrift = _driftPpm * elapsedSec / 1000.0;
+    return predictedDrift.abs() > thresholdMs;
+  }
+
+  // Recalibrage forcé (reset confiance Kalman)
+  Future<bool> forceRecalibrate() async {
+    _kalmanP00 = 100.0; // Reset incertitude
+    _kalmanP11 = 10.0;
+    return await calibrate();
+  }
+}
+```
+
+### Filtre de Kalman — Principe
+
+Le filtre modélise l'horloge comme un système dynamique :
+
+```
+État : [offset_ms, drift_ms_per_sec]
+
+Prédiction :
+  offset(t+dt) = offset(t) + drift × dt
+  drift(t+dt)  = drift(t)  (constant + bruit processus)
+
+Mise à jour (quand nouvelle mesure arrive) :
+  innovation = mesure - offset_prédit
+  gain_K = covariance / (covariance + bruit_mesure)
+  offset += gain_K × innovation
+  drift  += gain_K2 × innovation
+  covariance *= (1 - gain_K)
+```
+
+**Avantages sur la médiane brute** :
+- Lisse le bruit réseau tout en restant réactif aux vrais changements
+- Estime le drift directement (pas besoin de 2 calibrations successives)
+- Fournit un intervalle de confiance (covariance) pour décider quand recalibrer
+
+### Calibration adaptative — Intervalles
+
+| Jitter observé | Intervalle | Rationale |
+|----------------|-----------|-----------|
+| < 5ms | 15s | Réseau stable, économise batterie et bande passante |
+| 5-15ms | 10s | Comportement standard (ancien défaut) |
+| 15-30ms | 3s | Réseau dégradé, rattrapage rapide |
+| > 30ms | 1s | Mode critique, compensation agressive |
+
+Le premier calibrage après connexion utilise 3s pour établir rapidement la baseline.
+
+### Historique du moteur de synchronisation
+
+<details>
+<summary><b>v0.1.2 → v0.1.15 : Médiane brute + Intervalle fixe 10s</b></summary>
+
+```dart
+// ANCIENNE IMPLÉMENTATION (remplacée en v0.1.16)
+class ClockSyncEngine {
+  double _offsetMs = 0;
+  double _driftPpm = 0;
+
   int get syncedTimeMs {
     return DateTime.now().millisecondsSinceEpoch + _offsetMs;
   }
 
-  // Offset calculé par échange NTP-like
-  double _offsetMs = 0;
-  double _driftPpm = 0; // dérive en parties par million
+  // Intervalle FIXE de 10 secondes
+  void startAutoCalibration() {
+    _calibrationTimer = Timer.periodic(
+      Duration(milliseconds: 10000), // ← Fixe
+      (_) async { await calibrate(); },
+    );
+  }
 
-  // Recalibrage toutes les 30 secondes
   Future<void> calibrate() async {
     final samples = <ClockSample>[];
     for (int i = 0; i < 8; i++) {
-      final t1 = DateTime.now().millisecondsSinceEpoch;
-      final response = await _sendSyncRequest();
-      final t4 = DateTime.now().millisecondsSinceEpoch;
-      samples.add(ClockSample(t1, response.t2, response.t3, t4));
-      await Future.delayed(Duration(milliseconds: 100));
+      final sample = await _sendSyncRequest();
+      samples.add(sample);
+      await Future.delayed(Duration(milliseconds: 50));
     }
-    // Filtrage statistique (éliminer les outliers)
+    // Filtrage outliers (IQR) puis MÉDIANE BRUTE
     final filtered = _filterOutliers(samples);
-    // Calcul offset et drift
-    _offsetMs = _calculateOffset(filtered);
-    _driftPpm = _calculateDrift(filtered);
+    final offsets = filtered.map((s) => s.offset).toList()..sort();
+    _offsetMs = _median(offsets); // ← Pas de lissage temporel
+    // Drift calculé seulement si 2 calibrations successives
+    if (_lastCalibration != null) {
+      _driftPpm = (newOffset - _previousOffset) / elapsedSec * 1000.0;
+    }
   }
 }
 ```
+
+**Limitations** :
+- Intervalle fixe : 10s même si le réseau est stable (gaspillage) ou instable (trop lent)
+- Médiane brute : pas de lissage entre calibrations, sensibilité au bruit
+- Drift nécessite 2 calibrations successives pour être calculé
+- Pas de détection proactive de dérive excessive
+
+</details>
 
 ### Compensation de dérive (drift compensation)
 
@@ -175,10 +295,15 @@ Les horloges hardware dérivent de 7-40 ppm. Sur 30 secondes entre recalibrages 
 - Drift max : 40 ppm × 30s = 1.2ms
 - Acceptable pour la synchronisation audio
 
+> **Mise à jour v0.1.16** : Avec la calibration adaptative, le drift max entre
+> calibrages est réduit à 0.04ms (intervalle 1s en mode critique) ou 0.4ms (10s normal).
+> Le filtre de Kalman compense en continu via `_driftPpm` sans attendre le prochain calibrage.
+
 Mécanisme :
-1. Mesurer le drift entre deux calibrations successives
-2. Appliquer une correction linéaire continue entre les calibrations
-3. Si le drift dépasse un seuil (5ms), forcer un recalibrage immédiat
+1. Le filtre de Kalman estime le drift en continu (ms/s)
+2. Compensation appliquée dans `syncedTimeMs` à chaque appel
+3. Si la dérive prédite dépasse 5ms → `needsRecalibration()` retourne true
+4. Le `SessionManager` peut alors appeler `forceRecalibrate()`
 
 ### Buffer adaptatif
 

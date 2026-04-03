@@ -224,7 +224,9 @@ class FirebaseService {
     if (!_initialized) return;
     try {
       await _analytics!.setUserProperty(name: name, value: value);
-    } catch (_) {}
+    } catch (e) {
+      _logger.d('setUserProperty failed: $e');
+    }
   }
 
   // ── Crashlytics ──
@@ -244,7 +246,9 @@ class FirebaseService {
         reason: reason,
         fatal: fatal,
       );
-    } catch (_) {}
+    } catch (e) {
+      _logger.d('recordError failed: $e');
+    }
   }
 
   /// Log a message to Crashlytics.
@@ -252,7 +256,9 @@ class FirebaseService {
     if (!_initialized) return;
     try {
       await _crashlytics!.log(message);
-    } catch (_) {}
+    } catch (e) {
+      _logger.d('Crashlytics log failed: $e');
+    }
   }
 
   /// Set custom key for Crashlytics.
@@ -260,7 +266,9 @@ class FirebaseService {
     if (!_initialized) return;
     try {
       await _crashlytics!.setCustomKey(key, value);
-    } catch (_) {}
+    } catch (e) {
+      _logger.d('setCustomKey failed: $e');
+    }
   }
 
   // ── Firestore ──

@@ -1,14 +1,20 @@
 import 'package:equatable/equatable.dart';
 import 'audio_session.dart';
 
+enum RepeatMode { off, one, all }
+
 /// Manages a queue of audio tracks for sequential playback.
 class Playlist extends Equatable {
   final List<AudioTrack> tracks;
   final int currentIndex;
+  final RepeatMode repeatMode;
+  final bool isShuffled;
 
   const Playlist({
     this.tracks = const [],
     this.currentIndex = 0,
+    this.repeatMode = RepeatMode.off,
+    this.isShuffled = false,
   });
 
   /// Whether the queue is empty.
@@ -92,8 +98,8 @@ class Playlist extends Equatable {
   }
 
   /// Shuffle the playlist (keeping current track at position 0).
-  Playlist shuffle() {
-    if (tracks.length <= 1) return this;
+  Playlist? shuffle() {
+    if (tracks.length <= 1) return null;
     final current = currentTrack;
     final others = List<AudioTrack>.from(tracks);
     if (current != null) {
@@ -103,19 +109,69 @@ class Playlist extends Equatable {
     if (current != null) {
       others.insert(0, current);
     }
-    return Playlist(tracks: others, currentIndex: 0);
+    return Playlist(
+      tracks: others,
+      currentIndex: 0,
+      repeatMode: repeatMode,
+      isShuffled: true,
+    );
+  }
+
+  /// Cycle through repeat modes: off → all → one → off
+  Playlist toggleRepeat() {
+    final nextMode = switch (repeatMode) {
+      RepeatMode.off => RepeatMode.all,
+      RepeatMode.all => RepeatMode.one,
+      RepeatMode.one => RepeatMode.off,
+    };
+    return copyWith(repeatMode: nextMode);
   }
 
   Playlist copyWith({
     List<AudioTrack>? tracks,
     int? currentIndex,
+    RepeatMode? repeatMode,
+    bool? isShuffled,
   }) {
     return Playlist(
       tracks: tracks ?? this.tracks,
       currentIndex: currentIndex ?? this.currentIndex,
+      repeatMode: repeatMode ?? this.repeatMode,
+      isShuffled: isShuffled ?? this.isShuffled,
     );
   }
 
   @override
-  List<Object?> get props => [tracks, currentIndex];
+  List<Object?> get props => [tracks, currentIndex, repeatMode, isShuffled];
+
+  /// Sérialiser la playlist en JSON.
+  Map<String, dynamic> toJson() {
+    return {
+      'tracks': tracks.map((t) => t.toJson()).toList(),
+      'currentIndex': currentIndex,
+      'repeatMode': repeatMode.name,
+      'isShuffled': isShuffled,
+    };
+  }
+
+  /// Désérialiser depuis JSON.
+  factory Playlist.fromJson(Map<String, dynamic> json) {
+    final tracksJson = json['tracks'] as List? ?? [];
+    final tracks = tracksJson
+        .whereType<Map<String, dynamic>>()
+        .map((t) => AudioTrack.fromJson(t))
+        .toList();
+    final currentIndex = (json['currentIndex'] as num?)?.toInt() ?? 0;
+    final repeatModeName = json['repeatMode'] as String?;
+    final repeatMode = repeatModeName != null
+        ? RepeatMode.values.byName(repeatModeName)
+        : RepeatMode.off;
+    final isShuffled = json['isShuffled'] as bool? ?? false;
+    return Playlist(
+      tracks: tracks,
+      currentIndex: currentIndex.clamp(0, tracks.isEmpty ? 0 : tracks.length - 1),
+      repeatMode: repeatMode,
+      isShuffled: isShuffled,
+    );
+  }
 }

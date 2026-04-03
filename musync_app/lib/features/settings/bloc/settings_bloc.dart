@@ -52,26 +52,51 @@ class CacheCleared extends SettingsEvent {
   const CacheCleared();
 }
 
-class ApkTransferToDeviceRequested extends SettingsEvent {
-  final DeviceInfo device;
-
-  const ApkTransferToDeviceRequested(this.device);
-
-  @override
-  List<Object?> get props => [device];
+/// Start the HTTP server to share the APK on the local network.
+class ApkShareStartRequested extends SettingsEvent {
+  const ApkShareStartRequested();
 }
 
-class ApkUpdateConnectedDeviceRequested extends SettingsEvent {
-  const ApkUpdateConnectedDeviceRequested();
+/// Stop the HTTP APK share server.
+class ApkShareStopRequested extends SettingsEvent {
+  const ApkShareStopRequested();
 }
 
-class ApkTransferProgress extends SettingsEvent {
-  final double progress;
+/// Check GitHub Releases for a newer version.
+class UpdateCheckRequested extends SettingsEvent {
+  const UpdateCheckRequested();
+}
 
-  const ApkTransferProgress(this.progress);
+/// Download the available update APK.
+class UpdateDownloadRequested extends SettingsEvent {
+  const UpdateDownloadRequested();
+}
+
+class JoinNotificationToggled extends SettingsEvent {
+  final bool enabled;
+
+  const JoinNotificationToggled(this.enabled);
 
   @override
-  List<Object?> get props => [progress];
+  List<Object?> get props => [enabled];
+}
+
+class PlayDelayChanged extends SettingsEvent {
+  final int delayMs;
+
+  const PlayDelayChanged(this.delayMs);
+
+  @override
+  List<Object?> get props => [delayMs];
+}
+
+class AutoRejoinToggled extends SettingsEvent {
+  final bool enabled;
+
+  const AutoRejoinToggled(this.enabled);
+
+  @override
+  List<Object?> get props => [enabled];
 }
 
 // ── State ──
@@ -83,9 +108,25 @@ class SettingsState extends Equatable {
   final int cacheSize;
   final bool isLoading;
   final String? errorMessage;
-  final bool isApkTransferring;
-  final double apkTransferProgress;
-  final String? apkTransferStatus;
+
+  // APK share
+  final bool isApkShareRunning;
+  final String? apkShareUrl;
+  final int apkSharePort;
+
+  // Update
+  final bool isCheckingUpdate;
+  final bool isDownloadingUpdate;
+  final UpdateInfo? updateInfo;
+  final double downloadProgress;
+  final String? downloadedApkPath;
+
+  // Notifications
+  final bool joinNotificationEnabled;
+
+  // Advanced
+  final int playDelayMs;
+  final bool autoRejoinLastSession;
 
   const SettingsState({
     this.themeMode = ThemeMode.system,
@@ -94,9 +135,17 @@ class SettingsState extends Equatable {
     this.cacheSize = 0,
     this.isLoading = true,
     this.errorMessage,
-    this.isApkTransferring = false,
-    this.apkTransferProgress = 0.0,
-    this.apkTransferStatus,
+    this.isApkShareRunning = false,
+    this.apkShareUrl,
+    this.apkSharePort = 8080,
+    this.isCheckingUpdate = false,
+    this.isDownloadingUpdate = false,
+    this.updateInfo,
+    this.downloadProgress = 0.0,
+    this.downloadedApkPath,
+    this.joinNotificationEnabled = true,
+    this.playDelayMs = 5000,
+    this.autoRejoinLastSession = false,
   });
 
   SettingsState copyWith({
@@ -106,11 +155,21 @@ class SettingsState extends Equatable {
     int? cacheSize,
     bool? isLoading,
     String? errorMessage,
-    bool? isApkTransferring,
-    double? apkTransferProgress,
-    String? apkTransferStatus,
+    bool? isApkShareRunning,
+    String? apkShareUrl,
+    int? apkSharePort,
     bool clearError = false,
-    bool clearApkStatus = false,
+    bool clearShareUrl = false,
+    bool? isCheckingUpdate,
+    bool? isDownloadingUpdate,
+    UpdateInfo? updateInfo,
+    double? downloadProgress,
+    String? downloadedApkPath,
+    bool clearUpdateInfo = false,
+    bool clearDownloadedPath = false,
+    bool? joinNotificationEnabled,
+    int? playDelayMs,
+    bool? autoRejoinLastSession,
   }) {
     return SettingsState(
       themeMode: themeMode ?? this.themeMode,
@@ -119,9 +178,17 @@ class SettingsState extends Equatable {
       cacheSize: cacheSize ?? this.cacheSize,
       isLoading: isLoading ?? this.isLoading,
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
-      isApkTransferring: isApkTransferring ?? this.isApkTransferring,
-      apkTransferProgress: apkTransferProgress ?? this.apkTransferProgress,
-      apkTransferStatus: clearApkStatus ? null : (apkTransferStatus ?? this.apkTransferStatus),
+      isApkShareRunning: isApkShareRunning ?? this.isApkShareRunning,
+      apkShareUrl: clearShareUrl ? null : (apkShareUrl ?? this.apkShareUrl),
+      apkSharePort: apkSharePort ?? this.apkSharePort,
+      isCheckingUpdate: isCheckingUpdate ?? this.isCheckingUpdate,
+      isDownloadingUpdate: isDownloadingUpdate ?? this.isDownloadingUpdate,
+      updateInfo: clearUpdateInfo ? null : (updateInfo ?? this.updateInfo),
+      downloadProgress: downloadProgress ?? this.downloadProgress,
+      downloadedApkPath: clearDownloadedPath ? null : (downloadedApkPath ?? this.downloadedApkPath),
+      joinNotificationEnabled: joinNotificationEnabled ?? this.joinNotificationEnabled,
+      playDelayMs: playDelayMs ?? this.playDelayMs,
+      autoRejoinLastSession: autoRejoinLastSession ?? this.autoRejoinLastSession,
     );
   }
 
@@ -133,9 +200,17 @@ class SettingsState extends Equatable {
         cacheSize,
         isLoading,
         errorMessage,
-        isApkTransferring,
-        apkTransferProgress,
-        apkTransferStatus,
+        isApkShareRunning,
+        apkShareUrl,
+        apkSharePort,
+        isCheckingUpdate,
+        isDownloadingUpdate,
+        updateInfo,
+        downloadProgress,
+        downloadedApkPath,
+        joinNotificationEnabled,
+        playDelayMs,
+        autoRejoinLastSession,
       ];
 }
 
@@ -145,16 +220,22 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
   final SharedPreferences _prefs;
   final SessionManager _sessionManager;
   final FirebaseService _firebase;
+  final ApkShareService _apkShare;
+  final UpdateService _update;
   final Logger _logger;
 
   SettingsBloc({
     required SharedPreferences prefs,
     required SessionManager sessionManager,
     FirebaseService? firebase,
+    ApkShareService? apkShare,
+    UpdateService? update,
     Logger? logger,
   })  : _prefs = prefs,
         _sessionManager = sessionManager,
         _firebase = firebase ?? FirebaseService(),
+        _apkShare = apkShare ?? ApkShareService(),
+        _update = update ?? UpdateService(),
         _logger = logger ?? Logger(),
         super(const SettingsState()) {
     on<LoadSettings>(_onLoadSettings);
@@ -162,9 +243,13 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     on<DeviceNameChanged>(_onDeviceNameChanged);
     on<DefaultVolumeChanged>(_onDefaultVolumeChanged);
     on<CacheCleared>(_onCacheCleared);
-    on<ApkTransferToDeviceRequested>(_onApkTransferToDevice);
-    on<ApkUpdateConnectedDeviceRequested>(_onApkUpdateConnectedDevice);
-    on<ApkTransferProgress>(_onApkTransferProgress);
+    on<ApkShareStartRequested>(_onApkShareStart);
+    on<ApkShareStopRequested>(_onApkShareStop);
+    on<UpdateCheckRequested>(_onUpdateCheck);
+    on<UpdateDownloadRequested>(_onUpdateDownload);
+    on<JoinNotificationToggled>(_onJoinNotificationToggled);
+    on<PlayDelayChanged>(_onPlayDelayChanged);
+    on<AutoRejoinToggled>(_onAutoRejoinToggled);
   }
 
   Future<void> _onLoadSettings(
@@ -181,6 +266,9 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
       final deviceName =
           _prefs.getString('device_name') ?? 'MusyncMIMO Device';
       final cacheSize = await _calculateCacheSize();
+      final joinNotificationEnabled = _prefs.getBool('join_notification_enabled') ?? true;
+      final playDelayMs = _prefs.getInt('play_delay_ms') ?? 5000;
+      final autoRejoinLastSession = _prefs.getBool('auto_rejoin_last_session') ?? false;
 
       emit(SettingsState(
         themeMode: themeMode,
@@ -188,6 +276,10 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
         defaultVolume: defaultVolume,
         cacheSize: cacheSize,
         isLoading: false,
+        isApkShareRunning: _apkShare.isRunning,
+        joinNotificationEnabled: joinNotificationEnabled,
+        playDelayMs: playDelayMs,
+        autoRejoinLastSession: autoRejoinLastSession,
       ));
     } catch (e, stack) {
       _logger.e('Failed to load settings: $e');
@@ -220,6 +312,8 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     Emitter<SettingsState> emit,
   ) async {
     await _prefs.setString('device_name', event.deviceName);
+    // BUG-6 FIX: Propagate name change to session manager (discovery + local device)
+    _sessionManager.updateDeviceName(event.deviceName);
     emit(state.copyWith(deviceName: event.deviceName, clearError: true));
   }
 
@@ -262,154 +356,206 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
         }
       }
       return total;
-    } catch (_) {
+    } catch (e) {
+      _logger.d('Failed to calculate transfer dir size: $e');
       return 0;
     }
   }
 
-  Future<void> _onApkTransferToDevice(
-    ApkTransferToDeviceRequested event,
+  /// Start the HTTP server to share the APK.
+  Future<void> _onApkShareStart(
+    ApkShareStartRequested event,
     Emitter<SettingsState> emit,
   ) async {
-    emit(state.copyWith(isApkTransferring: true, apkTransferProgress: 0.0, apkTransferStatus: 'Envoi en cours...'));
+    emit(state.copyWith(isApkShareRunning: true, clearShareUrl: true));
 
     try {
-      // Get APK path
-      final apkPath = await _getApkPath();
-      if (apkPath == null) {
+      // 1. Start the HTTP server
+      final port = await _apkShare.start(port: state.apkSharePort);
+      if (port == null) {
         emit(state.copyWith(
-          isApkTransferring: false,
-          errorMessage: 'Impossible de trouver le fichier APK',
-          clearApkStatus: true,
+          isApkShareRunning: false,
+          errorMessage: 'Impossible de démarrer le partage APK. Vérifiez que l\'APK est disponible.',
         ));
         return;
       }
 
-      // Send APK offer to device
-      final apkFile = File(apkPath);
-      final fileSize = await apkFile.length();
-      final offerMsg = ProtocolMessage.apkTransferOffer(
-        version: AppConstants.appVersion,
-        fileSizeBytes: fileSize,
+      // 2. Resolve local IP (from session if available, otherwise discover it)
+      String? localIp = _sessionManager.localIp;
+      if (localIp == null) {
+        // Not in a session — resolve IP directly
+        try {
+          final discovery = DeviceDiscovery(
+            deviceId: 'temp',
+            deviceName: 'temp',
+          );
+          localIp = await discovery.getLocalIp();
+          await discovery.dispose();
+        } catch (e) {
+          _logger.w('Failed to resolve IP via DeviceDiscovery: $e');
+        }
+      }
+
+      if (localIp == null) {
+        // BUG-9 FIX: Try fallback method to get local IP
+        try {
+          final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
+          for (final interface in interfaces) {
+            for (final addr in interface.addresses) {
+              if (!addr.isLoopback) {
+                localIp = addr.address;
+                break;
+              }
+            }
+            if (localIp != null) break;
+          }
+        } catch (e) {
+          _logger.w('Failed to resolve IP via NetworkInterface: $e');
+        }
+      }
+
+      if (localIp == null) {
+        emit(state.copyWith(
+          isApkShareRunning: false,
+          errorMessage: 'Impossible de résoudre l\'adresse IP. Vérifiez votre connexion Wi-Fi.',
+        ));
+        await _apkShare.stop();
+        return;
+      }
+
+      // 3. Build the share URL
+      final shareUrl = 'http://$localIp:$port/apk';
+
+      _logger.i('APK share started: $shareUrl');
+      emit(state.copyWith(
+        isApkShareRunning: true,
+        apkShareUrl: shareUrl,
+        apkSharePort: port,
+      ));
+    } catch (e, stack) {
+      _logger.e('Failed to start APK share: $e');
+      _firebase.recordError(e, stack, reason: 'apkShareStart');
+      emit(state.copyWith(
+        isApkShareRunning: false,
+        errorMessage: 'Erreur lors du démarrage du partage: $e',
+      ));
+    }
+  }
+
+  /// Stop the HTTP APK share server.
+  Future<void> _onApkShareStop(
+    ApkShareStopRequested event,
+    Emitter<SettingsState> emit,
+  ) async {
+    try {
+      await _apkShare.stop();
+      _logger.i('APK share stopped');
+      emit(state.copyWith(isApkShareRunning: false, clearShareUrl: true));
+    } catch (e, stack) {
+      _logger.e('Failed to stop APK share: $e');
+      _firebase.recordError(e, stack, reason: 'apkShareStop');
+      emit(state.copyWith(
+        isApkShareRunning: false,
+        clearShareUrl: true,
+        errorMessage: 'Erreur lors de l\'arrêt du partage: $e',
+      ));
+    }
+  }
+
+  /// Check GitHub Releases for a newer version.
+  Future<void> _onUpdateCheck(
+    UpdateCheckRequested event,
+    Emitter<SettingsState> emit,
+  ) async {
+    emit(state.copyWith(isCheckingUpdate: true, clearError: true, clearUpdateInfo: true));
+    try {
+      final info = await _update.checkForUpdate(AppConstants.appVersion);
+      if (info != null && info.isNewer) {
+        _logger.i('Update available: ${info.latestVersion}');
+        emit(state.copyWith(
+          isCheckingUpdate: false,
+          updateInfo: info,
+        ));
+      } else {
+        _logger.i('No update available');
+        emit(state.copyWith(
+          isCheckingUpdate: false,
+          errorMessage: 'Aucune mise à jour disponible. Vous avez déjà la dernière version.',
+        ));
+      }
+    } catch (e, stack) {
+      _logger.e('Update check failed: $e');
+      _firebase.recordError(e, stack, reason: 'updateCheck');
+      emit(state.copyWith(
+        isCheckingUpdate: false,
+        errorMessage: 'Erreur lors de la vérification: $e',
+      ));
+    }
+  }
+
+  /// Download the available update APK.
+  Future<void> _onUpdateDownload(
+    UpdateDownloadRequested event,
+    Emitter<SettingsState> emit,
+  ) async {
+    final updateInfo = state.updateInfo;
+    if (updateInfo == null) return;
+
+    emit(state.copyWith(isDownloadingUpdate: true, downloadProgress: 0.0, clearError: true));
+    try {
+      final path = await _update.downloadUpdate(
+        updateInfo,
+        onProgress: (progress) {
+          // Note: can't emit inside the callback safely, progress shown via state
+        },
       );
 
-      // If device is connected as slave, send directly
-      if (_sessionManager.role == DeviceRole.host) {
-        await _sessionManager.sendToSlave(event.device.id, offerMsg);
+      if (path != null) {
+        _logger.i('Update downloaded: $path');
         emit(state.copyWith(
-          isApkTransferring: false,
-          apkTransferStatus: 'Offre envoyée à ${event.device.name}',
+          isDownloadingUpdate: false,
+          downloadProgress: 1.0,
+          downloadedApkPath: path,
         ));
       } else {
         emit(state.copyWith(
-          isApkTransferring: false,
-          errorMessage: 'Vous devez être hôte pour envoyer l\'APK',
-          clearApkStatus: true,
+          isDownloadingUpdate: false,
+          errorMessage: 'Échec du téléchargement de la mise à jour.',
         ));
       }
     } catch (e, stack) {
-      _logger.e('Failed to send APK transfer offer: $e');
-      _firebase.recordError(e, stack, reason: 'apkTransferOffer');
+      _logger.e('Update download failed: $e');
+      _firebase.recordError(e, stack, reason: 'updateDownload');
       emit(state.copyWith(
-        isApkTransferring: false,
-        errorMessage: 'Erreur lors de l\'envoi de l\'APK: $e',
-        clearApkStatus: true,
+        isDownloadingUpdate: false,
+        errorMessage: 'Erreur lors du téléchargement: $e',
       ));
     }
   }
 
-  Future<void> _onApkUpdateConnectedDevice(
-    ApkUpdateConnectedDeviceRequested event,
+  Future<void> _onJoinNotificationToggled(
+    JoinNotificationToggled event,
     Emitter<SettingsState> emit,
   ) async {
-    emit(state.copyWith(isApkTransferring: true, apkTransferProgress: 0.0, apkTransferStatus: 'Vérification des versions...'));
-
-    try {
-      final session = _sessionManager.currentSession;
-      if (session == null || _sessionManager.role != DeviceRole.host) {
-        emit(state.copyWith(
-          isApkTransferring: false,
-          errorMessage: 'Vous devez être hôte dans une session',
-          clearApkStatus: true,
-        ));
-        return;
-      }
-
-      // Get APK info
-      final apkPath = await _getApkPath();
-      if (apkPath == null) {
-        emit(state.copyWith(
-          isApkTransferring: false,
-          errorMessage: 'Impossible de trouver le fichier APK',
-          clearApkStatus: true,
-        ));
-        return;
-      }
-
-      final apkFile = File(apkPath);
-      final fileSize = await apkFile.length();
-
-      // Send offer to all connected slaves
-      final offerMsg = ProtocolMessage.apkTransferOffer(
-        version: AppConstants.appVersion,
-        fileSizeBytes: fileSize,
-      );
-
-      await _sessionManager.broadcast(offerMsg);
-
-      emit(state.copyWith(
-        isApkTransferring: false,
-        apkTransferStatus: 'Offre de mise à jour envoyée (${session.slaves.length} appareils)',
-      ));
-    } catch (e, stack) {
-      _logger.e('Failed to send APK update offer: $e');
-      _firebase.recordError(e, stack, reason: 'apkUpdateOffer');
-      emit(state.copyWith(
-        isApkTransferring: false,
-        errorMessage: 'Erreur lors de l\'envoi de la mise à jour: $e',
-        clearApkStatus: true,
-      ));
-    }
+    await _prefs.setBool('join_notification_enabled', event.enabled);
+    emit(state.copyWith(joinNotificationEnabled: event.enabled, clearError: true));
   }
 
-  void _onApkTransferProgress(
-    ApkTransferProgress event,
+  Future<void> _onPlayDelayChanged(
+    PlayDelayChanged event,
     Emitter<SettingsState> emit,
-  ) {
-    emit(state.copyWith(
-      apkTransferProgress: event.progress,
-      apkTransferStatus: 'Envoi: ${(event.progress * 100).round()}%',
-    ));
+  ) async {
+    await _prefs.setInt('play_delay_ms', event.delayMs);
+    emit(state.copyWith(playDelayMs: event.delayMs, clearError: true));
+    _logger.i('Play delay changed: ${event.delayMs}ms');
   }
 
-  /// Get the path of the current APK file.
-  Future<String?> _getApkPath() async {
-    try {
-      if (!Platform.isAndroid) {
-        _logger.w('APK transfer only supported on Android');
-        return null;
-      }
-
-      // On Android, get the APK path from the package info
-      final appDir = await getApplicationSupportDirectory();
-      final apkDir = Directory('${appDir.path}/apk_cache');
-      if (!await apkDir.exists()) {
-        await apkDir.create(recursive: true);
-      }
-
-      // Check if we have a cached APK
-      final cachedApk = File('${apkDir.path}/musync-${AppConstants.appVersion}.apk');
-      if (await cachedApk.exists()) {
-        return cachedApk.path;
-      }
-
-      // APK not cached - need to build or copy from assets
-      // For now, return null - in production, this would trigger a build
-      _logger.w('APK not found in cache. Build APK first with: flutter build apk');
-      return null;
-    } catch (e) {
-      _logger.e('Failed to get APK path: $e');
-      return null;
-    }
+  Future<void> _onAutoRejoinToggled(
+    AutoRejoinToggled event,
+    Emitter<SettingsState> emit,
+  ) async {
+    await _prefs.setBool('auto_rejoin_last_session', event.enabled);
+    emit(state.copyWith(autoRejoinLastSession: event.enabled, clearError: true));
+    _logger.i('Auto-rejoin ${event.enabled ? "enabled" : "disabled"}');
   }
 }

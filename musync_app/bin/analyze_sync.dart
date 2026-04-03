@@ -1,6 +1,5 @@
 #!/usr/bin/env dart
 
-// ignore_for_file: avoid_print
 /// MusyncMIMO Clock Sync Performance Analyzer
 /// 
 /// This script measures the performance of the NTP-like clock synchronization
@@ -9,6 +8,9 @@
 /// Run: dart run bin/analyze_sync.dart
 
 import 'dart:math';
+import 'package:logger/logger.dart';
+
+final _logger = Logger();
 
 class ClockSample {
   final int t1, t2, t3, t4;
@@ -19,9 +21,9 @@ class ClockSample {
 }
 
 void main() {
-  print('═══════════════════════════════════════════════════════');
-  print('  MusyncMIMO — Clock Sync Performance Analysis');
-  print('═══════════════════════════════════════════════════════\n');
+  _logger.i('═══════════════════════════════════════════════════════');
+  _logger.i('  MusyncMIMO — Clock Sync Performance Analysis');
+  _logger.i('═══════════════════════════════════════════════════════\n');
 
   final rng = Random(42); // Fixed seed for reproducibility
 
@@ -39,10 +41,10 @@ void main() {
     final jitterMs = scenario['jitterMs'] as double;
     final trueOffsetMs = scenario['offsetMs'] as double;
 
-    print('─── Scenario: $name ───');
-    print('  True offset: ${trueOffsetMs.toStringAsFixed(1)}ms');
-    print('  Network jitter: ±${jitterMs.toStringAsFixed(1)}ms');
-    print('');
+    _logger.i('─── Scenario: $name ───');
+    _logger.i('  True offset: ${trueOffsetMs.toStringAsFixed(1)}ms');
+    _logger.i('  Network jitter: ±${jitterMs.toStringAsFixed(1)}ms');
+    _logger.i('');
 
     // Run 100 calibration cycles
     final measuredOffsets = <double>[];
@@ -97,11 +99,11 @@ void main() {
     final maxOffset = measuredOffsets.last;
     final p95Offset = measuredOffsets[(measuredOffsets.length * 0.95).round() - 1];
 
-    print('  Results (${measuredOffsets.length} cycles):');
-    print('    Avg measured offset: ${avgOffset.toStringAsFixed(2)}ms');
-    print('    Avg jitter:          ${avgJitter.toStringAsFixed(2)}ms');
-    print('    P95 offset:          ${p95Offset.toStringAsFixed(2)}ms');
-    print('    Max offset:          ${maxOffset.toStringAsFixed(2)}ms');
+    _logger.i('  Results (${measuredOffsets.length} cycles):');
+    _logger.i('    Avg measured offset: ${avgOffset.toStringAsFixed(2)}ms');
+    _logger.i('    Avg jitter:          ${avgJitter.toStringAsFixed(2)}ms');
+    _logger.i('    P95 offset:          ${p95Offset.toStringAsFixed(2)}ms');
+    _logger.i('    Max offset:          ${maxOffset.toStringAsFixed(2)}ms');
 
     final quality = avgJitter < 5
         ? 'EXCELLENT'
@@ -110,20 +112,20 @@ void main() {
             : avgJitter < 30
                 ? 'ACCEPTABLE'
                 : 'POOR';
-    print('    Quality:             $quality');
-    print('');
+    _logger.i('    Quality:             $quality');
+    _logger.i('');
   }
 
-  print('═══════════════════════════════════════════════════════');
-  print('  Summary');
-  print('═══════════════════════════════════════════════════════');
-  print('');
-  print('  Target: < 30ms skew between devices');
-  print('  Result: Achievable on Wi-Fi 5GHz and 2.4GHz (good)');
-  print('          Marginal on congested networks');
-  print('          May need larger buffer on poor networks');
-  print('');
-  print('  Recommendation: Use Wi-Fi 5GHz when possible.');
-  print('  Fallback: Increase buffer to 200ms on poor networks.');
-  print('');
+  _logger.i('═══════════════════════════════════════════════════════');
+  _logger.i('  Summary');
+  _logger.i('═══════════════════════════════════════════════════════');
+  _logger.i('');
+  _logger.i('  Target: < 30ms skew between devices');
+  _logger.i('  Result: Achievable on Wi-Fi 5GHz and 2.4GHz (good)');
+  _logger.i('          Marginal on congested networks');
+  _logger.i('          May need larger buffer on poor networks');
+  _logger.i('');
+  _logger.i('  Recommendation: Use Wi-Fi 5GHz when possible.');
+  _logger.i('  Fallback: Increase buffer to 200ms on poor networks.');
+  _logger.i('');
 }

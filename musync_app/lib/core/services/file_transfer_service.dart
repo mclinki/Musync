@@ -12,7 +12,7 @@ import '../utils/format.dart';
 /// Handles file transfer between host and slaves.
 ///
 /// When the host wants to play a local file:
-/// 1. Host sends fileTransferStart with file metadata
+/// 1. Host sends fileTransferStart with file metadata + transferId
 /// 2. Host sends fileTransferChunk for each chunk (base64 encoded)
 /// 3. Host sends fileTransferEnd
 /// 4. Slave sends fileTransferAck when file is saved
@@ -24,8 +24,11 @@ class FileTransferService {
   // Temporary directory for received files
   Directory? _tempDir;
   
-  // Active transfers (slave side)
+  // Active transfers (slave side) — keyed by transferId (CRIT-003 fix)
   final Map<String, _IncomingTransfer> _incomingTransfers = {};
+  
+  // Current transfer ID for the active transfer (set by fileTransferStart)
+  String? _activeTransferId;
   
   // Stream controller for transfer progress
   final StreamController<TransferProgress> _progressController = 
@@ -80,6 +83,15 @@ class FileTransferService {
     }
 
     for (final key in staleKeys) {
+      final transfer = _incomingTransfers[key];
+      // MED-005 fix: Delete partial file when cleaning up stale transfer
+      if (transfer != null && _tempDir != null) {
+        final partialFile = File('${_tempDir!.path}/${transfer.fileName}');
+        if (partialFile.existsSync()) {
+          partialFile.deleteSync();
+          _logger.d('Deleted partial file: ${transfer.fileName}');
+        }
+      }
       _incomingTransfers.remove(key);
     }
   }
@@ -101,12 +113,15 @@ class FileTransferService {
       return false;
     }
 
-    final fileName = filePath.split('/').last.split('\\').last;
+    final fileName = extractFileName(filePath);
     final fileSize = await file.length();
     const chunkSize = AppConstants.fileChunkSizeBytes;
     final totalChunks = (fileSize / chunkSize).ceil();
+    // Unique transfer ID for unambiguous chunk routing (CRIT-003 fix)
+    final transferId = '${DateTime.now().millisecondsSinceEpoch}_$fileName';
 
     _logger.i('=== STARTING FILE TRANSFER (binary) ===');
+    _logger.i('transferId: $transferId');
     _logger.i('fileName: $fileName');
     _logger.i('fileSize: ${formatBytes(fileSize)}');
     _logger.i('totalChunks: $totalChunks');
@@ -118,6 +133,7 @@ class FileTransferService {
       fileSizeBytes: fileSize,
       totalChunks: totalChunks,
       chunkSizeBytes: chunkSize,
+      transferId: transferId,
     );
     server.broadcast(startMsg);
     _logger.d('Sent fileTransferStart message');
@@ -251,8 +267,16 @@ class FileTransferService {
 
   /// Handle binary transfer chunk.
   Future<String?> _handleBinaryTransferChunk(int chunkIndex, List<int> data) async {
-    if (_incomingTransfers.isEmpty) {
+    // Use active transfer ID instead of .values.last (CRIT-003 fix)
+    final transferId = _activeTransferId;
+    if (transferId == null) {
       _logger.w('Received binary chunk but no active transfer!');
+      return null;
+    }
+
+    final transfer = _incomingTransfers[transferId];
+    if (transfer == null) {
+      _logger.w('Received binary chunk for unknown transfer: $transferId');
       return null;
     }
 
@@ -260,9 +284,6 @@ class FileTransferService {
       _logger.w('Invalid chunk index: $chunkIndex');
       return null;
     }
-
-    // Find the transfer this chunk belongs to (most recent if ambiguous)
-    final transfer = _incomingTransfers.values.last;
 
     // Verify chunk order - insert at correct index
     if (chunkIndex < transfer.totalChunks) {
@@ -290,9 +311,14 @@ class FileTransferService {
   }
 
   Future<String?> _handleTransferStart(ProtocolMessage message) async {
-    final fileName = message.payload['file_name'] as String? ?? 'unknown';
+    final rawFileName = message.payload['file_name'] as String? ?? 'unknown';
+    final fileName = rawFileName
+        .replaceAll(RegExp(r'[./\\]'), '_')
+        .replaceAll(RegExp(r'[^a-zA-Z0-9_.\-]'), '_');
     final fileSize = (message.payload['file_size_bytes'] as num?)?.toInt() ?? 0;
     final totalChunks = (message.payload['total_chunks'] as num?)?.toInt() ?? 0;
+    // Transfer ID for unambiguous chunk routing (CRIT-003 fix)
+    final transferId = message.payload['transfer_id'] as String? ?? fileName;
 
     if (fileName == 'unknown' || fileSize == 0 || totalChunks == 0) {
       _logger.w('Invalid fileTransferStart payload: ${message.payload}');
@@ -300,11 +326,13 @@ class FileTransferService {
     }
 
     _logger.i('=== FILE TRANSFER START ===');
+    _logger.i('transferId: $transferId');
     _logger.i('fileName: $fileName');
     _logger.i('fileSize: $fileSize bytes');
     _logger.i('totalChunks: $totalChunks');
 
-    _incomingTransfers[fileName] = _IncomingTransfer(
+    _activeTransferId = transferId;
+    _incomingTransfers[transferId] = _IncomingTransfer(
       fileName: fileName,
       fileSize: fileSize,
       totalChunks: totalChunks,
@@ -315,9 +343,16 @@ class FileTransferService {
   }
 
   Future<String?> _handleTransferChunk(ProtocolMessage message) async {
-    // Find active transfer by filename (supports concurrent transfers)
-    if (_incomingTransfers.isEmpty) {
+    // Use active transfer ID instead of .values.last (CRIT-003 fix)
+    final transferId = _activeTransferId;
+    if (transferId == null) {
       _logger.w('Received chunk but no active transfer!');
+      return null;
+    }
+
+    final transfer = _incomingTransfers[transferId];
+    if (transfer == null) {
+      _logger.w('Received chunk for unknown transfer: $transferId');
       return null;
     }
     
@@ -328,9 +363,6 @@ class FileTransferService {
       _logger.w('Invalid fileTransferChunk payload: ${message.payload}');
       return null;
     }
-
-    // Find the transfer this chunk belongs to (most recent if ambiguous)
-    final transfer = _incomingTransfers.values.last;
 
     final bytes = base64Decode(base64Data);
 
@@ -360,18 +392,27 @@ class FileTransferService {
   }
 
   Future<String?> _handleTransferEnd(ProtocolMessage message) async {
-    if (_incomingTransfers.isEmpty) {
+    // Use active transfer ID instead of .values.first (CRIT-003 fix)
+    final transferId = _activeTransferId;
+    if (transferId == null) {
       _logger.w('No active transfer to complete');
+      return null;
+    }
+
+    final transfer = _incomingTransfers[transferId];
+    if (transfer == null) {
+      _logger.w('Transfer $transferId not found for completion');
+      _activeTransferId = null;
       return null;
     }
 
     if (_tempDir == null) {
       _logger.e('Cannot save file: temp dir not initialized');
-      _incomingTransfers.clear();
+      _incomingTransfers.remove(transferId);
+      _activeTransferId = null;
       return null;
     }
     
-    final transfer = _incomingTransfers.values.first;
     _logger.i('Completing transfer for ${transfer.fileName}, ${transfer.chunks.length} chunks received');
     
     // Combine all chunks
@@ -394,7 +435,8 @@ class FileTransferService {
     }
 
     // Clean up transfer state
-    _incomingTransfers.remove(transfer.fileName);
+    _incomingTransfers.remove(transferId);
+    _activeTransferId = null;
 
     return filePath;
   }

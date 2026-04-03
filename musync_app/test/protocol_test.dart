@@ -78,6 +78,18 @@ void main() {
       final decoded = ProtocolMessage.decode('{"type":"unknown_type","payload":{},"ts":0}');
       expect(decoded.type, MessageType.error);
     });
+
+    test('volumeControl message contains volume', () {
+      final msg = ProtocolMessage.volumeControl(volume: 0.75);
+
+      expect(msg.type, MessageType.volumeControl);
+      expect(msg.payload['volume'], 0.75);
+
+      final encoded = msg.encode();
+      final decoded = ProtocolMessage.decode(encoded);
+      expect(decoded.type, MessageType.volumeControl);
+      expect(decoded.payload['volume'], 0.75);
+    });
   });
 
   group('DeviceInfo', () {

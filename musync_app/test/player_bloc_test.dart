@@ -38,6 +38,9 @@ void main() {
     when(() => sessionManager.role).thenReturn(DeviceRole.none);
     when(() => sessionManager.fileTransfer).thenReturn(fileTransfer);
     when(() => sessionManager.clientEvents).thenReturn(null);
+    when(() => sessionManager.stateStream).thenAnswer(
+      (_) => Stream<SessionManagerState>.fromIterable([]),
+    );
 
     // Stub file transfer progress stream
     when(() => fileTransfer.progressStream).thenAnswer(
@@ -47,6 +50,16 @@ void main() {
     // Stub sync quality stream
     when(() => sessionManager.syncQualityStream).thenAnswer(
       (_) => Stream<SyncQualityUpdate>.fromIterable([]),
+    );
+
+    // Stub connected devices stream
+    when(() => sessionManager.connectedDevicesStream).thenAnswer(
+      (_) => Stream<List<ConnectedDeviceInfo>>.fromIterable([]),
+    );
+
+    // Stub all guests ready stream
+    when(() => sessionManager.allGuestsReadyStream).thenAnswer(
+      (_) => Stream<bool>.fromIterable([]),
     );
 
     // Stub audio engine streams
@@ -59,6 +72,10 @@ void main() {
     when(() => audioEngine.position).thenReturn(Duration.zero);
     when(() => audioEngine.duration).thenReturn(const Duration(minutes: 3));
     when(() => audioEngine.currentTrack).thenReturn(null);
+    when(() => audioEngine.loadTrack(any())).thenAnswer((_) async {});
+    when(() => audioEngine.durationStream).thenAnswer(
+      (_) => Stream<Duration?>.fromIterable([const Duration(minutes: 3)]),
+    );
   });
 
   group('PlayerBloc', () {
@@ -96,33 +113,63 @@ void main() {
     );
 
     blocTest<PlayerBloc, PlayerState>(
-      'AddToQueueRequested adds track to playlist',
+      'AddToQueueRequested loads track when playlist is empty',
       build: () => PlayerBloc(sessionManager: sessionManager),
+      act: (bloc) {
+        bloc.add(AddToQueueRequested(AudioTrack.fromFilePath('/test/song1.mp3')));
+      },
+      expect: () => [
+        isA<PlayerState>().having((s) => s.status, 'status', PlayerStatus.loading),
+        isA<PlayerState>()
+            .having((s) => s.status, 'status', PlayerStatus.paused)
+            .having((s) => s.playlist.length, 'playlist length', 1)
+            .having((s) => s.currentTrack, 'currentTrack', isNotNull),
+      ],
+    );
+
+    blocTest<PlayerBloc, PlayerState>(
+      'AddToQueueRequested adds track to playlist when playlist is not empty',
+      build: () => PlayerBloc(sessionManager: sessionManager),
+      seed: () => PlayerState(
+        status: PlayerStatus.paused,
+        currentTrack: AudioTrack.fromFilePath('/test/existing.mp3'),
+        playlist: Playlist(
+          tracks: [AudioTrack.fromFilePath('/test/existing.mp3')],
+        ),
+      ),
       act: (bloc) {
         bloc.add(AddToQueueRequested(AudioTrack.fromFilePath('/test/song1.mp3')));
         bloc.add(AddToQueueRequested(AudioTrack.fromFilePath('/test/song2.mp3')));
       },
       expect: () => [
         isA<PlayerState>()
-            .having((s) => s.playlist.length, 'playlist length', 1),
-        isA<PlayerState>()
             .having((s) => s.playlist.length, 'playlist length', 2),
+        isA<PlayerState>()
+            .having((s) => s.playlist.length, 'playlist length', 3),
       ],
     );
 
     blocTest<PlayerBloc, PlayerState>(
       'RemoveFromQueueRequested removes track',
-      build: () => PlayerBloc(sessionManager: sessionManager),
+      build: () {
+        when(() => sessionManager.pausePlayback()).thenAnswer((_) async {});
+        when(() => audioEngine.stop()).thenAnswer((_) async {});
+        return PlayerBloc(sessionManager: sessionManager);
+      },
+      seed: () => PlayerState(
+        status: PlayerStatus.paused,
+        currentTrack: AudioTrack.fromFilePath('/test/song1.mp3'),
+        playlist: Playlist(
+          tracks: [
+            AudioTrack.fromFilePath('/test/song1.mp3'),
+            AudioTrack.fromFilePath('/test/song2.mp3'),
+          ],
+        ),
+      ),
       act: (bloc) {
-        bloc.add(AddToQueueRequested(AudioTrack.fromFilePath('/test/song1.mp3')));
-        bloc.add(AddToQueueRequested(AudioTrack.fromFilePath('/test/song2.mp3')));
         bloc.add(const RemoveFromQueueRequested(0));
       },
       expect: () => [
-        isA<PlayerState>()
-            .having((s) => s.playlist.length, 'playlist length', 1),
-        isA<PlayerState>()
-            .having((s) => s.playlist.length, 'playlist length', 2),
         isA<PlayerState>()
             .having((s) => s.playlist.length, 'playlist length', 1),
       ],
@@ -131,16 +178,21 @@ void main() {
     blocTest<PlayerBloc, PlayerState>(
       'ClearQueueRequested clears playlist and resets track',
       build: () {
+        when(() => sessionManager.pausePlayback()).thenAnswer((_) async {});
         when(() => audioEngine.stop()).thenAnswer((_) async {});
         return PlayerBloc(sessionManager: sessionManager);
       },
+      seed: () => PlayerState(
+        status: PlayerStatus.paused,
+        currentTrack: AudioTrack.fromFilePath('/test/song1.mp3'),
+        playlist: Playlist(
+          tracks: [AudioTrack.fromFilePath('/test/song1.mp3')],
+        ),
+      ),
       act: (bloc) {
-        bloc.add(AddToQueueRequested(AudioTrack.fromFilePath('/test/song1.mp3')));
         bloc.add(const ClearQueueRequested());
       },
       expect: () => [
-        isA<PlayerState>()
-            .having((s) => s.playlist.length, 'playlist length', 1),
         isA<PlayerState>()
             .having((s) => s.playlist.isEmpty, 'playlist empty', true)
             .having((s) => s.currentTrack, 'currentTrack', isNull)

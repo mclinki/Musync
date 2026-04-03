@@ -98,7 +98,9 @@ class WebSocketClient {
         final disconnectMsg = ProtocolMessage(type: MessageType.disconnect);
         _socket!.add(disconnectMsg.encode());
         await _socket!.close();
-      } catch (_) {}
+      } catch (e) {
+        _logger.d('Disconnect error: $e');
+      }
     }
 
     _isConnected = false;
@@ -152,6 +154,9 @@ class WebSocketClient {
   /// Dispose resources.
   Future<void> dispose() async {
     _userDisconnected = true;
+    // HIGH-013 fix: Cancel reconnect timer BEFORE disconnecting
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     await disconnect();
     await _eventController.close();
     clockSync.dispose();
@@ -166,10 +171,16 @@ class WebSocketClient {
     }
 
     try {
-      _logger.i('Connecting to ws://$hostIp:$hostPort/musync...');
+      final scheme = AppConstants.useTls ? 'wss' : 'ws';
+      final uri = '$scheme://$hostIp:$hostPort${AppConstants.webSocketPath}';
+      _logger.i('Connecting to $uri...');
 
-      _socket = await WebSocket.connect('ws://$hostIp:$hostPort${AppConstants.webSocketPath}')
-          .timeout(const Duration(milliseconds: AppConstants.connectionTimeoutMs));
+      if (AppConstants.useTls) {
+        _socket = await _connectWss(uri);
+      } else {
+        _socket = await WebSocket.connect(uri)
+            .timeout(const Duration(milliseconds: AppConstants.connectionTimeoutMs));
+      }
 
       _isConnected = true;
       _isReconnecting = false;
@@ -198,6 +209,28 @@ class WebSocketClient {
       }
 
       return false;
+    }
+  }
+
+  /// Connect via WSS, accepting self-signed certificates.
+  Future<WebSocket> _connectWss(String uri) async {
+    final httpClient = HttpClient()
+      ..badCertificateCallback = (cert, host, port) => true;
+
+    try {
+      final request = await httpClient.getUrl(Uri.parse(uri))
+          .timeout(const Duration(milliseconds: AppConstants.connectionTimeoutMs));
+      final response = await request.close()
+          .timeout(const Duration(milliseconds: AppConstants.connectionTimeoutMs));
+
+      if (response.statusCode != 101) {
+        throw Exception('WebSocket upgrade failed: ${response.statusCode}');
+      }
+
+      final socket = await response.detachSocket();
+      return WebSocket.fromUpgradedSocket(socket, serverSide: false);
+    } finally {
+      httpClient.close(force: true);
     }
   }
 
@@ -339,6 +372,9 @@ class WebSocketClient {
               type: ClientEventType.apkTransferOffer,
               protocolMessage: message,
             ));
+            break;
+          case MessageType.volumeControl:
+            _handleVolumeControl(message);
             break;
           default:
             _logger.d('Unhandled message type: ${message.type}');
@@ -517,12 +553,23 @@ class WebSocketClient {
     _socket?.add(ack.encode());
   }
 
+  void _handleVolumeControl(ProtocolMessage message) {
+    final volume = (message.payload['volume'] as num?)?.toDouble() ?? 1.0;
+    _logger.i('Received volume control: $volume');
+    _eventController.add(ClientEvent(
+      type: ClientEventType.volumeControlCommand,
+      volume: volume,
+    ));
+  }
+
   void _sendHeartbeat() {
     if (_isConnected && _socket != null) {
       final ack = ProtocolMessage.heartbeatAck();
       try {
         _socket!.add(ack.encode());
-      } catch (_) {}
+      } catch (e) {
+        _logger.d('Heartbeat send error: $e');
+      }
     }
   }
 
@@ -576,6 +623,7 @@ enum ClientEventType {
   skipNextCommand,
   skipPrevCommand,
   playlistUpdateCommand,
+  volumeControlCommand,
   fileTransferMessage,
   fileTransferBinary,
   apkTransferOffer,
@@ -591,10 +639,11 @@ class ClientEvent {
   final int? startAtMs;
   final int? seekPositionMs;
   final int? positionMs;
+  final double? volume;
   final ProtocolMessage? protocolMessage;
   final List<Map<String, dynamic>>? playlistTracks;
   final int? playlistCurrentIndex;
-  final List<int>? binaryData; // Binary data for file transfer chunks
+  final List<int>? binaryData;
 
   const ClientEvent({
     required this.type,
@@ -605,6 +654,7 @@ class ClientEvent {
     this.startAtMs,
     this.seekPositionMs,
     this.positionMs,
+    this.volume,
     this.protocolMessage,
     this.playlistTracks,
     this.playlistCurrentIndex,

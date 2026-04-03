@@ -38,6 +38,8 @@ class AudioEngine {
 
   // Track if we were playing before an interruption
   bool _wasPlayingBeforeInterruption = false;
+  // MED-001 fix: Track which audio was playing before interruption
+  AudioTrack? _trackBeforeInterruption;
 
   AudioEngine({Logger? logger})
       : _logger = logger ?? Logger(),
@@ -91,7 +93,7 @@ class AudioEngine {
       _positionTimer = Timer.periodic(
         const Duration(milliseconds: AppConstants.positionUpdateIntervalMs),
         (_) {
-          if (_player.playing) {
+          if (_player.playing && !_positionController.isClosed) {
             _positionController.add(_player.position);
           }
         },
@@ -105,6 +107,7 @@ class AudioEngine {
   }
 
   /// Load a track for playback.
+  /// Waits for the player to be ready before returning.
   Future<void> loadTrack(AudioTrack track) async {
     _logger.i('Loading track: ${track.title} (${track.source})');
     _setState(AudioEngineState.loading);
@@ -123,7 +126,26 @@ class AudioEngine {
       }
 
       _currentTrack = track;
-      _logger.i('Track loaded successfully: ${track.title}');
+
+      // BUG-7 FIX: Wait for player to be fully ready (not buffering/loading)
+      // just_audio may still be in buffering state right after setFilePath returns
+      if (_player.processingState == ja.ProcessingState.buffering ||
+          _player.processingState == ja.ProcessingState.loading) {
+        _logger.d('Waiting for player to be ready...');
+        await _player.playerStateStream.firstWhere(
+          (s) => s.processingState == ja.ProcessingState.ready ||
+                 s.processingState == ja.ProcessingState.completed,
+        ).timeout(
+          const Duration(seconds: 10),
+          onTimeout: () {
+            _logger.w('Timed out waiting for player ready state');
+            return _player.playerState;
+          },
+        );
+      }
+
+      _setState(AudioEngineState.paused);
+      _logger.i('Track loaded and ready: ${track.title}');
     } catch (e) {
       _logger.e('Failed to load track: $e');
       _setState(AudioEngineState.error);
@@ -241,12 +263,17 @@ class AudioEngine {
 
   /// Dispose resources.
   Future<void> dispose() async {
+    // Cancel timer FIRST to prevent callbacks firing on closed controllers
     _positionTimer?.cancel();
+    _positionTimer = null;
+
     await _playerStateSub?.cancel();
     await _interruptionSub?.cancel();
     await _player.dispose();
-    await _stateController.close();
-    await _positionController.close();
+
+    // Close controllers AFTER all producers are stopped
+    if (!_stateController.isClosed) await _stateController.close();
+    if (!_positionController.isClosed) await _positionController.close();
     _logger.i('Audio engine disposed');
   }
 
@@ -258,7 +285,9 @@ class AudioEngine {
       // Interruption started
       _logger.i('Audio interruption began: ${event.type}');
       _wasPlayingBeforeInterruption = _player.playing;
-      
+      // MED-001 fix: Remember which track was playing
+      _trackBeforeInterruption = _currentTrack;
+
       if (event.type == asession.AudioInterruptionType.pause ||
           event.type == asession.AudioInterruptionType.unknown) {
         // Pause playback for pause-type interruptions
@@ -269,13 +298,15 @@ class AudioEngine {
     } else {
       // Interruption ended
       _logger.i('Audio interruption ended: ${event.type}');
-      
+
       if (event.type == asession.AudioInterruptionType.pause ||
           event.type == asession.AudioInterruptionType.unknown) {
-        // Resume if we were playing before the interruption
-        if (_wasPlayingBeforeInterruption) {
+        // MED-001 fix: Only resume if the same track is still loaded
+        if (_wasPlayingBeforeInterruption && _currentTrack == _trackBeforeInterruption) {
           _player.play();
           _logger.d('Resumed after interruption');
+        } else if (_wasPlayingBeforeInterruption && _currentTrack != _trackBeforeInterruption) {
+          _logger.d('Skipping resume: track changed during interruption');
         }
       }
     }

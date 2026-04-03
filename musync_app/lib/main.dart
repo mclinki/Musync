@@ -9,6 +9,8 @@ import 'features/player/bloc/player_bloc.dart';
 import 'features/player/ui/player_screen.dart';
 import 'features/settings/bloc/settings_bloc.dart';
 import 'features/settings/ui/settings_screen.dart';
+import 'features/groups/ui/groups_screen.dart';
+import 'features/onboarding/ui/onboarding_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,8 +22,9 @@ void main() async {
       const Duration(seconds: 5),
       onTimeout: () => false, // Continue without permissions
     );
-  } catch (_) {
+  } catch (e) {
     // Permissions not critical for startup
+    debugPrint('Permission request failed: $e');
   }
 
   // 2. Initialize Firebase (optional - app works without it) — with timeout
@@ -34,11 +37,15 @@ void main() async {
         return;
       },
     );
-  } catch (_) {
+  } catch (e) {
     // Firebase not configured - app continues without it
+    debugPrint('Firebase initialization failed: $e');
   }
 
-  // 3. Create session manager
+  // 3. Get SharedPreferences (BEFORE session manager init — needed for device name)
+  final prefs = await SharedPreferences.getInstance();
+
+  // 4. Create session manager
   final sessionManager = SessionManager();
 
   // Wire Firebase analytics to SessionManager (optional)
@@ -46,23 +53,29 @@ void main() async {
     sessionManager.setFirebaseService(firebase);
   }
 
-  // 4. Generate device ID
+  // 5. Generate device ID
   final deviceId = const Uuid().v4();
 
-  // 5. Initialize session manager — with timeout to prevent ANR
+  // 6. Read custom device name from prefs (BUG-6 FIX)
+  final deviceName = prefs.getString('device_name') ?? 'MusyncMIMO Device';
+
+  // 7. Initialize session manager — with timeout to prevent ANR
   try {
     await sessionManager.initialize(
       deviceId: deviceId,
-      deviceName: 'MusyncMIMO Device',
+      deviceName: deviceName,
       deviceType: 'phone',
     ).timeout(
-      const Duration(seconds: 10),
+      const Duration(seconds: 30), // Increased from 10s — audio/network init can be slow on cold start
       onTimeout: () {
-        // Continue with partial initialization
+        debugPrint('⚠️ SessionManager init timed out after 30s');
       },
     );
-  } catch (_) {
-    // Session manager initialization failed - app continues with limited functionality
+    if (!sessionManager.isInitialized) {
+      debugPrint('⚠️ SessionManager initialized flag is false after timeout');
+    }
+  } catch (e) {
+    debugPrint('⚠️ SessionManager init failed: $e');
   }
 
   // 5. Log device info to Crashlytics (if available)
@@ -71,10 +84,7 @@ void main() async {
     await firebase.setCustomKey('platform', 'flutter');
   }
 
-  // 6. Get SharedPreferences
-  final prefs = await SharedPreferences.getInstance();
-
-  // 7. Run app
+  // 8. Run app
   runApp(MusyncApp(
     sessionManager: sessionManager,
     firebaseService: firebase,
@@ -82,7 +92,7 @@ void main() async {
   ));
 }
 
-class MusyncApp extends StatelessWidget {
+class MusyncApp extends StatefulWidget {
   final SessionManager sessionManager;
   final FirebaseService firebaseService;
   final SharedPreferences prefs;
@@ -95,23 +105,79 @@ class MusyncApp extends StatelessWidget {
   });
 
   @override
+  State<MusyncApp> createState() => _MusyncAppState();
+}
+
+class _MusyncAppState extends State<MusyncApp> {
+  bool? _showOnboarding;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkOnboarding();
+  }
+
+  Future<void> _checkOnboarding() async {
+    final completed = widget.prefs.getBool('onboarding_completed') ?? false;
+    if (mounted) {
+      setState(() => _showOnboarding = !completed);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    if (_showOnboarding == null) {
+      return MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF6750A4),
+            brightness: Brightness.light,
+          ),
+          useMaterial3: true,
+        ),
+        home: const Scaffold(body: Center(child: CircularProgressIndicator())),
+      );
+    }
+
+    if (_showOnboarding!) {
+      return MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF6750A4),
+            brightness: Brightness.light,
+          ),
+          useMaterial3: true,
+        ),
+        darkTheme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF6750A4),
+            brightness: Brightness.dark,
+          ),
+          useMaterial3: true,
+        ),
+        home: OnboardingScreen(onComplete: () => setState(() => _showOnboarding = false)),
+      );
+    }
+
     return MultiRepositoryProvider(
       providers: [
-        RepositoryProvider<SessionManager>.value(value: sessionManager),
-        RepositoryProvider<FirebaseService>.value(value: firebaseService),
+        RepositoryProvider<SessionManager>.value(value: widget.sessionManager),
+        RepositoryProvider<FirebaseService>.value(value: widget.firebaseService),
       ],
       child: MultiBlocProvider(
         providers: [
           BlocProvider(
             create: (_) => SettingsBloc(
-              prefs: prefs,
-              sessionManager: sessionManager,
+              prefs: widget.prefs,
+              sessionManager: widget.sessionManager,
             )..add(const LoadSettings()),
           ),
           BlocProvider(
             create: (_) => PlayerBloc(
-              sessionManager: sessionManager,
+              sessionManager: widget.sessionManager,
+              prefs: widget.prefs,
             ),
           ),
         ],
@@ -136,17 +202,35 @@ class MusyncApp extends StatelessWidget {
               ),
               themeMode: settingsState.themeMode,
               initialRoute: '/',
-              routes: {
-                '/': (context) => const HomeScreen(),
-                '/discovery': (context) => const DiscoveryScreen(),
-                '/player': (context) => const PlayerScreen(),
-                '/settings': (context) => const SettingsScreen(),
+              onGenerateRoute: (settings) {
+                Widget? target;
+                switch (settings.name) {
+                  case '/':
+                    target = const HomeScreen();
+                    break;
+                  case '/discovery':
+                    target = const DiscoveryScreen();
+                    break;
+                  case '/player':
+                    target = const PlayerScreen();
+                    break;
+                  case '/settings':
+                    target = const SettingsScreen();
+                    break;
+                  case '/groups':
+                    target = const GroupsScreen();
+                    break;
+                }
+                if (target != null) {
+                  return _animatedRoute(child: target, settings: settings);
+                }
+                return null;
               },
               // Firebase Analytics observer
               navigatorObservers: <NavigatorObserver>[
-                if (firebaseService.isInitialized && firebaseService.analytics != null)
+                if (widget.firebaseService.isInitialized && widget.firebaseService.analytics != null)
                   FirebaseAnalyticsObserver(
-                    analytics: firebaseService.analytics!,
+                    analytics: widget.firebaseService.analytics!,
                   ),
               ],
             );
@@ -155,6 +239,31 @@ class MusyncApp extends StatelessWidget {
       ),
     );
   }
+}
+
+PageRouteBuilder _animatedRoute({required Widget child, RouteSettings? settings}) {
+  return PageRouteBuilder(
+    settings: settings,
+    pageBuilder: (context, animation, secondaryAnimation) => child,
+    transitionsBuilder: (context, animation, secondaryAnimation, child) {
+      const begin = Offset(1.0, 0.0);
+      const end = Offset.zero;
+      const curve = Curves.easeInOutCubic;
+
+      var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
+      var offsetAnimation = animation.drive(tween);
+      var fadeAnimation = animation.drive(Tween(begin: 0.0, end: 1.0).chain(CurveTween(curve: curve)));
+
+      return FadeTransition(
+        opacity: fadeAnimation,
+        child: SlideTransition(
+          position: offsetAnimation,
+          child: child,
+        ),
+      );
+    },
+    transitionDuration: const Duration(milliseconds: 300),
+  );
 }
 
 /// Home / landing screen.
@@ -216,6 +325,22 @@ class HomeScreen extends StatelessWidget {
                   icon: const Icon(Icons.cast_connected),
                   label: const Text('Créer ou rejoindre un groupe'),
                   style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).pushNamed('/groups');
+                  },
+                  icon: const Icon(Icons.group),
+                  label: const Text('Groupes sauvegardés'),
+                  style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),
                 ),

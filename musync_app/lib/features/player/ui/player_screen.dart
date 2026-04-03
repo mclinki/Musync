@@ -1,9 +1,13 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide RepeatMode;
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../../core/core.dart';
+import '../../../core/models/playlist.dart' show RepeatMode;
+import '../../../core/utils/format.dart';
 import '../bloc/player_bloc.dart';
 import 'position_slider.dart';
+import 'host_dashboard.dart';
 
 /// Main player screen with playback controls.
 class PlayerScreen extends StatelessWidget {
@@ -42,10 +46,19 @@ class _PlayerView extends StatelessWidget {
       ),
       body: BlocBuilder<PlayerBloc, PlayerState>(
         builder: (context, state) {
+          final sessionManager = context.read<SessionManager>();
+          final isHost = sessionManager.role == DeviceRole.host;
+
           return SingleChildScrollView(
             padding: const EdgeInsets.all(24),
             child: Column(
               children: [
+                // Host dashboard (only for host)
+                if (isHost) ...[
+                  const HostDashboardCard(),
+                  const SizedBox(height: 16),
+                ],
+
                 // Track info
                 _TrackInfo(track: state.currentTrack),
 
@@ -67,6 +80,8 @@ class _PlayerView extends StatelessWidget {
                   status: state.status,
                   hasNext: state.hasNext,
                   hasPrevious: state.hasPrevious,
+                  isShuffled: state.isShuffled,
+                  repeatMode: state.playlist.repeatMode,
                   onPlay: () {
                     context.read<PlayerBloc>().add(const PlayRequested());
                   },
@@ -82,6 +97,12 @@ class _PlayerView extends StatelessWidget {
                   onSkipPrevious: () {
                     context.read<PlayerBloc>().add(const SkipPreviousRequested());
                   },
+                  onToggleShuffle: () {
+                    context.read<PlayerBloc>().add(const ToggleShuffleRequested());
+                  },
+                  onToggleRepeat: () {
+                    context.read<PlayerBloc>().add(const ToggleRepeatRequested());
+                  },
                 ),
 
                 const SizedBox(height: 32),
@@ -96,15 +117,8 @@ class _PlayerView extends StatelessWidget {
 
                 const SizedBox(height: 32),
 
-                // File picker
-                _FilePickerButton(
-                  onFilePicked: (track) {
-                    context.read<PlayerBloc>().add(LoadTrackRequested(track));
-                  },
-                  onAddToQueue: (track) {
-                    context.read<PlayerBloc>().add(AddToQueueRequested(track));
-                  },
-                ),
+                // File picker (contextual: load first or add to queue)
+                _ContextualFilePickerButton(),
 
                 // Queue info
                 if (state.playlist.isNotEmpty) ...[
@@ -234,7 +248,7 @@ class _PlayerView extends StatelessWidget {
                           final isCurrent =
                               index == state.playlist.currentIndex;
                           // Check if this track is currently syncing
-                          final fileName = track.source.split('/').last.split('\\').last;
+                          final fileName = extractFileName(track.source);
                           final isSyncing = state.syncingFiles.contains(fileName);
                           return ListTile(
                             leading: CircleAvatar(
@@ -287,6 +301,11 @@ class _PlayerView extends StatelessWidget {
                                         newPlaylist.currentTrack!),
                                   );
                             },
+                          ).animate().slideX(
+                            begin: 0.2,
+                            end: 0,
+                            delay: (index * 50).ms,
+                            duration: 300.ms,
                           );
                         },
                       ),
@@ -308,6 +327,7 @@ class _TrackInfo extends StatelessWidget {
   Widget build(BuildContext context) {
     if (track == null) {
       return Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
             Icons.music_note,
@@ -326,6 +346,7 @@ class _TrackInfo extends StatelessWidget {
     }
 
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
         Container(
           width: 200,
@@ -339,7 +360,10 @@ class _TrackInfo extends StatelessWidget {
             size: 80,
             color: Theme.of(context).colorScheme.onPrimaryContainer,
           ),
-        ),
+        )
+            .animate()
+            .fadeIn(duration: 400.ms, curve: Curves.easeOut)
+            .scale(begin: const Offset(0.9, 0.9), end: const Offset(1.0, 1.0), duration: 400.ms, curve: Curves.easeOut),
         const SizedBox(height: 16),
         Text(
           track!.title,
@@ -347,7 +371,10 @@ class _TrackInfo extends StatelessWidget {
           textAlign: TextAlign.center,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
-        ),
+        )
+            .animate()
+            .fadeIn(duration: 400.ms, curve: Curves.easeOut)
+            .slideY(begin: 0.3, end: 0, duration: 400.ms, curve: Curves.easeOut),
         if (track!.artist != null) ...[
           const SizedBox(height: 4),
           Text(
@@ -355,7 +382,10 @@ class _TrackInfo extends StatelessWidget {
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
-          ),
+          )
+              .animate()
+              .fadeIn(duration: 400.ms, delay: 100.ms, curve: Curves.easeOut)
+              .slideY(begin: 0.2, end: 0, duration: 400.ms, curve: Curves.easeOut),
         ],
       ],
     );
@@ -366,21 +396,29 @@ class _PlaybackControls extends StatelessWidget {
   final PlayerStatus status;
   final bool hasNext;
   final bool hasPrevious;
+  final bool isShuffled;
+  final RepeatMode repeatMode;
   final VoidCallback onPlay;
   final VoidCallback onPause;
   final VoidCallback onStop;
   final VoidCallback onSkipNext;
   final VoidCallback onSkipPrevious;
+  final VoidCallback onToggleShuffle;
+  final VoidCallback onToggleRepeat;
 
   const _PlaybackControls({
     required this.status,
     required this.hasNext,
     required this.hasPrevious,
+    required this.isShuffled,
+    required this.repeatMode,
     required this.onPlay,
     required this.onPause,
     required this.onStop,
     required this.onSkipNext,
     required this.onSkipPrevious,
+    required this.onToggleShuffle,
+    required this.onToggleRepeat,
   });
 
   @override
@@ -392,6 +430,19 @@ class _PlaybackControls extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
+        // Shuffle
+        IconButton(
+          icon: Icon(
+            Icons.shuffle,
+            color: isShuffled
+                ? Theme.of(context).colorScheme.primary
+                : Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+          onPressed: onToggleShuffle,
+        ),
+
+        const SizedBox(width: 4),
+
         // Skip previous
         IconButton(
           iconSize: 36,
@@ -424,12 +475,17 @@ class _PlaybackControls extends StatelessWidget {
             ),
           )
         else
-          IconButton(
-            iconSize: 64,
-            icon: Icon(
-              isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 200),
+            transitionBuilder: (child, animation) => ScaleTransition(scale: animation, child: child),
+            child: IconButton(
+              key: ValueKey(isPlaying),
+              iconSize: 64,
+              icon: Icon(
+                isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+              ),
+              onPressed: isPlaying ? onPause : onPlay,
             ),
-            onPressed: isPlaying ? onPause : onPlay,
           ),
 
         const SizedBox(width: 8),
@@ -442,6 +498,21 @@ class _PlaybackControls extends StatelessWidget {
           color: hasNext
               ? null
               : Theme.of(context).colorScheme.outline.withValues(alpha: 0.3),
+        ),
+
+        const SizedBox(width: 4),
+
+        // Repeat
+        IconButton(
+          icon: Icon(
+            repeatMode == RepeatMode.one
+                ? Icons.repeat_one
+                : Icons.repeat,
+            color: repeatMode != RepeatMode.off
+                ? Theme.of(context).colorScheme.primary
+                : Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+          onPressed: onToggleRepeat,
         ),
       ],
     );
@@ -490,37 +561,27 @@ class _VolumeControl extends StatelessWidget {
   }
 }
 
-class _FilePickerButton extends StatelessWidget {
-  final ValueChanged<AudioTrack> onFilePicked;
-  final ValueChanged<AudioTrack> onAddToQueue;
-
-  const _FilePickerButton({
-    required this.onFilePicked,
-    required this.onAddToQueue,
-  });
+class _ContextualFilePickerButton extends StatelessWidget {
+  const _ContextualFilePickerButton();
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        OutlinedButton.icon(
-          onPressed: () => _pickFile(context, addToQueue: false),
-          icon: const Icon(Icons.folder_open),
-          label: const Text('Charger'),
-        ),
-        const SizedBox(width: 12),
-        OutlinedButton.icon(
-          onPressed: () => _pickFile(context, addToQueue: true),
-          icon: const Icon(Icons.playlist_add),
-          label: const Text('Ajouter à la file'),
-        ),
-      ],
+    return BlocBuilder<PlayerBloc, PlayerState>(
+      builder: (context, state) {
+        final isEmpty = state.playlist.isEmpty;
+        final icon = isEmpty ? Icons.folder_open : Icons.playlist_add;
+        final label = isEmpty ? 'Charger un premier morceau' : 'Ajouter à la file d\'attente';
+
+        return OutlinedButton.icon(
+          onPressed: () => _pickFiles(context, isEmpty),
+          icon: Icon(icon),
+          label: Text(label),
+        );
+      },
     );
   }
 
-  Future<void> _pickFile(BuildContext context,
-      {required bool addToQueue}) async {
+  Future<void> _pickFiles(BuildContext context, bool isEmpty) async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.audio,
       allowMultiple: true,
@@ -529,22 +590,16 @@ class _FilePickerButton extends StatelessWidget {
     if (!context.mounted) return;
 
     if (result != null && result.files.isNotEmpty) {
+      final bloc = context.read<PlayerBloc>();
+      bool isFirst = isEmpty;
       for (final file in result.files) {
         if (file.path != null) {
-          final track = AudioTrack.fromFilePath(file.path!);
-          if (addToQueue) {
-            onAddToQueue(track);
+          final track = await AudioTrack.fromFilePathWithMetadata(file.path!);
+          if (isFirst) {
+            bloc.add(LoadTrackRequested(track));
+            isFirst = false;
           } else {
-            onFilePicked(track);
-            // If multiple selected, add the rest to queue
-            if (result.files.length > 1) {
-              for (final remaining in result.files.skip(1)) {
-                if (remaining.path != null && remaining.path != file.path) {
-                  onAddToQueue(AudioTrack.fromFilePath(remaining.path!));
-                }
-              }
-            }
-            break;
+            bloc.add(AddToQueueRequested(track));
           }
         }
       }

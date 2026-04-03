@@ -45,7 +45,7 @@ android {
     defaultConfig {
         applicationId = "com.musync.mimo"
         // ── Firebase requiert minSdk 21, on met 23 pour être safe ──
-        minSdk = 23
+        minSdkVersion = flutter.minSdkVersion
         targetSdk = 35
         versionCode = flutterVersionCode.toInteger()
         versionName = flutterVersionName

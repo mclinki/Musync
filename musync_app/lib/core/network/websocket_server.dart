@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
+import 'package:basic_utils/basic_utils.dart';
 import 'package:logger/logger.dart';
 import '../app_constants.dart';
 import '../models/models.dart';
@@ -71,8 +72,18 @@ class WebSocketServer {
   /// Start the WebSocket server.
   Future<void> start() async {
     try {
-      _server = await HttpServer.bind(InternetAddress.anyIPv4, port);
-      _logger.i('WebSocket server started on port $port');
+      if (AppConstants.useTls) {
+        final securityContext = await _createSecurityContext();
+        _server = await HttpServer.bindSecure(
+          InternetAddress.anyIPv4,
+          port,
+          securityContext,
+        );
+        _logger.i('WebSocket server (WSS) started on port $port');
+      } else {
+        _server = await HttpServer.bind(InternetAddress.anyIPv4, port);
+        _logger.i('WebSocket server started on port $port');
+      }
 
       _server!.listen(_handleRequest);
 
@@ -85,6 +96,29 @@ class WebSocketServer {
       _logger.e('Failed to start WebSocket server: $e');
       rethrow;
     }
+  }
+
+  /// Create a SecurityContext with a self-signed certificate for WSS.
+  Future<SecurityContext> _createSecurityContext() async {
+    final keyPair = CryptoUtils.generateRSAKeyPair();
+    final privateKey = keyPair.privateKey as RSAPrivateKey;
+    final publicKey = keyPair.publicKey as RSAPublicKey;
+
+    final dn = {
+      'CN': 'musync.local',
+      'O': 'MusyncMIMO',
+      'C': 'US',
+    };
+
+    final csr = X509Utils.generateRsaCsrPem(dn, privateKey, publicKey);
+    final certificatePem = X509Utils.generateSelfSignedCertificate(privateKey, csr, 3650);
+    final privateKeyPem = CryptoUtils.encodeRSAPrivateKeyToPem(privateKey);
+
+    final context = SecurityContext()
+      ..usePrivateKeyBytes(privateKeyPem.codeUnits)
+      ..useCertificateChainBytes(certificatePem.codeUnits);
+
+    return context;
   }
 
   /// Stop the server and disconnect all slaves.
@@ -123,7 +157,16 @@ class WebSocketServer {
     int delayMs = AppConstants.defaultPlayDelayMs,
     int seekPositionMs = 0,
   }) async {
-    final startAtMs = clockSync.syncedTimeMs + delayMs;
+    // Adaptive delay: add jitter compensation if network is unstable
+    int effectiveDelay = delayMs;
+    final jitter = clockSync.stats.jitterMs;
+    if (jitter > 5) {
+      final compensation = (jitter * 2).round();
+      effectiveDelay += compensation;
+      _logger.d('Adaptive delay: base=$delayMs + jitter_comp=$compensation = $effectiveDelay');
+    }
+
+    final startAtMs = clockSync.syncedTimeMs + effectiveDelay;
 
     final message = ProtocolMessage.play(
       startAtMs: startAtMs,
@@ -164,16 +207,27 @@ class WebSocketServer {
     await broadcast(message);
   }
 
+  /// Broadcast a volume control command to all slaves.
+  Future<void> broadcastVolume({required double volume}) async {
+    final message = ProtocolMessage.volumeControl(volume: volume);
+    _logger.i('Broadcasting volume: $volume');
+    await broadcast(message);
+  }
+
   /// Broadcast a playlist update to all slaves.
   Future<void> broadcastPlaylistUpdate({
     required List<Map<String, dynamic>> tracks,
     required int currentIndex,
+    String? repeatMode,
+    bool? isShuffled,
   }) async {
     final message = ProtocolMessage.playlistUpdate(
       tracks: tracks,
       currentIndex: currentIndex,
+      repeatMode: repeatMode,
+      isShuffled: isShuffled,
     );
-    _logger.i('Broadcasting playlist update: ${tracks.length} tracks, index=$currentIndex');
+    _logger.i('Broadcasting playlist update: ${tracks.length} tracks, index=$currentIndex, repeat=$repeatMode, shuffled=$isShuffled');
     await broadcast(message);
   }
 
@@ -263,6 +317,12 @@ class WebSocketServer {
           case MessageType.disconnect:
             _handleDisconnectMessage(socket, message);
             break;
+          case MessageType.guestPause:
+            _handleGuestPause(socket, message);
+            break;
+          case MessageType.guestResume:
+            _handleGuestResume(socket, message);
+            break;
           default:
             _logger.w('Unhandled message type: ${message.type}');
         }
@@ -303,11 +363,21 @@ class WebSocketServer {
     final deviceJson = message.payload['device'];
     if (deviceJson is! Map<String, dynamic>) {
       _logger.e('Invalid device payload in join message');
+      socket.add(ProtocolMessage.reject(reason: 'Invalid join payload').encode());
+      socket.close();
       return;
     }
     final device = DeviceInfo.fromJson(deviceJson);
 
+    // Reject if session is full (HIGH-014 fix)
     final isReconnection = _slaves.containsKey(device.id);
+    if (!isReconnection && _slaves.length >= AppConstants.maxSlaves) {
+      _logger.w('Rejecting ${device.name}: session full (${_slaves.length}/${AppConstants.maxSlaves})');
+      socket.add(ProtocolMessage.reject(reason: 'Session is full (max ${AppConstants.maxSlaves} devices)').encode());
+      socket.close();
+      return;
+    }
+
     _logger.i('Device ${isReconnection ? "reconnecting" : "joining"}: ${device.name} (${device.id})');
     _slaves[device.id] = ConnectedSlave(
       deviceId: device.id,
@@ -367,6 +437,34 @@ class WebSocketServer {
     _removeSlaveBySocket(socket);
   }
 
+  void _handleGuestPause(WebSocket socket, ProtocolMessage message) {
+    final deviceId = _getDeviceIdForSocket(socket) ?? 'unknown';
+    final slave = _slaves[deviceId];
+    final deviceName = slave?.deviceName ?? 'unknown';
+    final positionMs = (message.payload['position_ms'] as num?)?.toInt() ?? 0;
+    _logger.i('Guest $deviceName paused at ${positionMs}ms');
+    // HIGH-009 fix: Use dedicated event type instead of generic messageReceived
+    _eventController.add(ServerEvent(
+      type: ServerEventType.guestPaused,
+      deviceId: deviceId,
+      deviceName: deviceName,
+      data: positionMs,
+    ));
+  }
+
+  void _handleGuestResume(WebSocket socket, ProtocolMessage message) {
+    final deviceId = _getDeviceIdForSocket(socket) ?? 'unknown';
+    final slave = _slaves[deviceId];
+    final deviceName = slave?.deviceName ?? 'unknown';
+    _logger.i('Guest $deviceName resumed playback');
+    // HIGH-009 fix: Use dedicated event type instead of generic messageReceived
+    _eventController.add(ServerEvent(
+      type: ServerEventType.guestResumed,
+      deviceId: deviceId,
+      deviceName: deviceName,
+    ));
+  }
+
   void _handleDisconnect(WebSocket socket) {
     _logger.i('WebSocket disconnected');
     _removeSlaveBySocket(socket);
@@ -418,7 +516,9 @@ class WebSocketServer {
         // Close the socket before removing
         try {
           slave.socket.close();
-        } catch (_) {}
+        } catch (e) {
+          _logger.d('Socket close error: $e');
+        }
         _slaves.remove(deviceId);
         _eventController.add(ServerEvent(
           type: ServerEventType.deviceDisconnected,
@@ -434,7 +534,9 @@ class WebSocketServer {
     for (final slave in _slaves.values) {
       try {
         slave.socket.add(heartbeat.encode());
-      } catch (_) {}
+      } catch (e) {
+        _logger.d('Heartbeat send error to ${slave.deviceName}: $e');
+      }
     }
   }
 
@@ -466,6 +568,8 @@ enum ServerEventType {
   deviceDisconnected,
   deviceReady,
   messageReceived,
+  guestPaused,    // HIGH-009 fix
+  guestResumed,   // HIGH-009 fix
   error,
 }
 

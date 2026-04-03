@@ -1,11 +1,15 @@
+import 'dart:io';
 import 'package:equatable/equatable.dart';
 import 'package:uuid/uuid.dart';
+import 'package:flutter_media_metadata/flutter_media_metadata.dart';
 import '../app_constants.dart';
+import '../utils/format.dart';
 import 'device_info.dart';
 
 /// Represents a multi-device audio session.
 class AudioSession extends Equatable {
   final String sessionId;
+  final String name;
   final DeviceInfo hostDevice;
   final List<DeviceInfo> slaves;
   final SessionState state;
@@ -15,6 +19,7 @@ class AudioSession extends Equatable {
 
   const AudioSession({
     required this.sessionId,
+    required this.name,
     required this.hostDevice,
     this.slaves = const [],
     this.state = SessionState.waiting,
@@ -26,6 +31,7 @@ class AudioSession extends Equatable {
   factory AudioSession.create({required DeviceInfo host}) {
     return AudioSession(
       sessionId: const Uuid().v4(),
+      name: 'Session_${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
       hostDevice: host,
       createdAt: DateTime.now(),
     );
@@ -33,6 +39,7 @@ class AudioSession extends Equatable {
 
   AudioSession copyWith({
     String? sessionId,
+    String? name,
     DeviceInfo? hostDevice,
     List<DeviceInfo>? slaves,
     SessionState? state,
@@ -43,6 +50,7 @@ class AudioSession extends Equatable {
   }) {
     return AudioSession(
       sessionId: sessionId ?? this.sessionId,
+      name: name ?? this.name,
       hostDevice: hostDevice ?? this.hostDevice,
       slaves: slaves ?? this.slaves,
       state: state ?? this.state,
@@ -74,6 +82,7 @@ class AudioSession extends Equatable {
 
   Map<String, dynamic> toJson() => {
         'session_id': sessionId,
+        'name': name,
         'host': hostDevice.toJson(),
         'slaves': slaves.map((d) => d.toJson()).toList(),
         'state': state.name,
@@ -85,6 +94,7 @@ class AudioSession extends Equatable {
   @override
   List<Object?> get props => [
         sessionId,
+        name,
         hostDevice,
         slaves,
         state,
@@ -141,16 +151,64 @@ class AudioTrack extends Equatable {
   });
 
   factory AudioTrack.fromFilePath(String path) {
-    final fileName = path.split('/').last.split('\\').last;
+    final fileName = extractFileName(path);
     final nameWithoutExt = fileName.contains('.')
         ? fileName.substring(0, fileName.lastIndexOf('.'))
         : fileName;
 
+    final pathHash = path.hashCode.abs().toRadixString(16).padLeft(8, '0');
+    final deterministicId = 'track_$pathHash';
+
     return AudioTrack(
-      id: const Uuid().v4(),
+      id: deterministicId,
       title: nameWithoutExt,
       source: path,
       sourceType: AudioSourceType.localFile,
+    );
+  }
+
+  static Future<AudioTrack> fromFilePathWithMetadata(String path) async {
+    final fileName = extractFileName(path);
+    final nameWithoutExt = fileName.contains('.')
+        ? fileName.substring(0, fileName.lastIndexOf('.'))
+        : fileName;
+    final pathHash = path.hashCode.abs().toRadixString(16).padLeft(8, '0');
+    final deterministicId = 'track_$pathHash';
+
+    String title = nameWithoutExt;
+    String? artist;
+    String? album;
+    int? durationMs;
+
+    if (!Platform.isWindows) {
+      try {
+        final file = File(path);
+        final metadata = await MetadataRetriever.fromFile(file);
+
+        title = metadata.trackName?.isNotEmpty == true
+            ? metadata.trackName!
+            : nameWithoutExt;
+        artist = metadata.trackArtistNames?.isNotEmpty == true
+            ? metadata.trackArtistNames!.join(', ')
+            : null;
+        album = metadata.albumName?.isNotEmpty == true
+            ? metadata.albumName
+            : null;
+        durationMs = metadata.trackDuration;
+      } catch (e) {
+        // Metadata extraction failed, use filename as fallback
+        title = nameWithoutExt;
+      }
+    }
+
+    return AudioTrack(
+      id: deterministicId,
+      title: title,
+      artist: artist,
+      album: album,
+      source: path,
+      sourceType: AudioSourceType.localFile,
+      durationMs: durationMs,
     );
   }
 
