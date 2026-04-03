@@ -1,7 +1,7 @@
 import 'dart:io';
+import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'package:equatable/equatable.dart';
 import 'package:uuid/uuid.dart';
-import 'package:flutter_media_metadata/flutter_media_metadata.dart';
 import '../app_constants.dart';
 import '../utils/format.dart';
 import 'device_info.dart';
@@ -183,18 +183,19 @@ class AudioTrack extends Equatable {
     if (!Platform.isWindows) {
       try {
         final file = File(path);
-        final metadata = await MetadataRetriever.fromFile(file);
+        final metadata = await readMetadata(file);
 
-        title = metadata.trackName?.isNotEmpty == true
-            ? metadata.trackName!
+        title = metadata.title?.isNotEmpty == true
+            ? metadata.title!
             : nameWithoutExt;
-        artist = metadata.trackArtistNames?.isNotEmpty == true
-            ? metadata.trackArtistNames!.join(', ')
+        artist = metadata.artist?.isNotEmpty == true
+            ? metadata.artist
             : null;
-        album = metadata.albumName?.isNotEmpty == true
-            ? metadata.albumName
+        album = metadata.album?.isNotEmpty == true
+            ? metadata.album
             : null;
-        durationMs = metadata.trackDuration;
+        // audio_metadata_reader doesn't provide duration
+        durationMs = null;
       } catch (e) {
         // Metadata extraction failed, use filename as fallback
         title = nameWithoutExt;

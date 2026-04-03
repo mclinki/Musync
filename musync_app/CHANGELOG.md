@@ -2,6 +2,13 @@
 
 All notable changes to MusyncMIMO will be documented in this file.
 
+## [0.1.36] - 2026-04-03 — Build Fix + Pure Dart ID3
+
+### Changed
+- **REPLACED** `flutter_media_metadata` (abandoned, native code, build broken) → `audio_metadata_reader` (pure Dart, cross-platform, actively maintained)
+- No more local cache patches needed — builds cleanly on any machine
+- APK release: 58.6MB (down from 163MB debug)
+
 ## [0.1.35] - 2026-04-03 — Audit & Security Release
 
 ### Added

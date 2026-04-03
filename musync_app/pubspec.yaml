@@ -1,6 +1,6 @@
 name: musync_mimo
 description: Synchronize music playback across multiple devices on the same Wi-Fi network.
-version: 0.1.35+35
+version: 0.1.36+36
 publish_to: 'none'
 
 environment:
@@ -33,8 +33,8 @@ dependencies:
   # File picking
   file_picker: ^8.0.7
 
-  # Audio metadata (ID3)
-  flutter_media_metadata: ^1.0.0+1
+  # Audio metadata (ID3) — pure Dart, cross-platform, no native code
+  audio_metadata_reader: ^1.4.2
 
   # UUID
   uuid: ^4.5.1

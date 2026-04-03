@@ -218,7 +218,10 @@ class WebSocketClient {
       ..badCertificateCallback = (cert, host, port) => true;
 
     try {
-      final request = await httpClient.getUrl(Uri.parse(uri))
+      // HttpClient.getUrl does not support 'wss://' — convert to 'https://'
+      // for the HTTP upgrade request.
+      final httpsUri = Uri.parse(uri.replaceFirst('wss://', 'https://'));
+      final request = await httpClient.getUrl(httpsUri)
           .timeout(const Duration(milliseconds: AppConstants.connectionTimeoutMs));
       final response = await request.close()
           .timeout(const Duration(milliseconds: AppConstants.connectionTimeoutMs));

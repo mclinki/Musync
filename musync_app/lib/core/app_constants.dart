@@ -6,7 +6,7 @@ class AppConstants {
   AppConstants._(); // Prevent instantiation
 
   // ── App Info ──────────────────────────────────────────
-  static const String appVersion = '0.1.35';
+  static const String appVersion = '0.1.36';
   static const String appName = 'MusyncMIMO';
 
   // ── Network ───────────────────────────────────────────

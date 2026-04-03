@@ -1,29 +1,30 @@
 import 'dart:io';
-import 'package:flutter_media_metadata/flutter_media_metadata.dart';
+import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'package:logger/logger.dart';
 
 class MetadataService {
   final Logger _logger;
   MetadataService({Logger? logger}) : _logger = logger ?? Logger();
 
+  /// Parse les métadonnées ID3 d'un fichier audio.
+  /// Retourne un Map avec title, artist, album, genre, year, trackNumber, duration, hasAlbumArt.
+  /// Fallback sur le nom de fichier si les métadonnées sont absentes.
   Future<Map<String, dynamic>> parseMetadata(String filePath) async {
-    if (!Platform.isAndroid && !Platform.isIOS && !Platform.isMacOS && !Platform.isLinux) {
-      _logger.d('ID3 parsing skipped on ${Platform.operatingSystem}');
-      return {};
-    }
     try {
       final file = File(filePath);
-      final metadata = await MetadataRetriever.fromFile(file);
+      if (!await file.exists()) return {};
+
+      final metadata = await readMetadata(file);
 
       return {
-        'title': metadata.trackName?.isNotEmpty == true ? metadata.trackName : null,
-        'artist': metadata.trackArtistNames?.isNotEmpty == true ? metadata.trackArtistNames!.join(', ') : null,
-        'album': metadata.albumName?.isNotEmpty == true ? metadata.albumName : null,
-        'genre': metadata.genre?.isNotEmpty == true ? metadata.genre : null,
+        'title': metadata.title?.isNotEmpty == true ? metadata.title : null,
+        'artist': metadata.artist?.isNotEmpty == true ? metadata.artist : null,
+        'album': metadata.album?.isNotEmpty == true ? metadata.album : null,
+        'genre': null, // audio_metadata_reader doesn't expose genre directly
         'year': metadata.year,
         'trackNumber': metadata.trackNumber,
-        'duration': metadata.trackDuration,
-        'hasAlbumArt': metadata.albumArt != null,
+        'duration': null, // audio_metadata_reader doesn't provide duration
+        'hasAlbumArt': metadata.pictures.isNotEmpty,
       };
     } catch (e) {
       _logger.w('Failed to parse metadata for $filePath: $e');
@@ -31,14 +32,14 @@ class MetadataService {
     }
   }
 
+  /// Extraire la pochette d'album comme Uint8List (JPEG/PNG).
   Future<List<int>?> extractAlbumArt(String filePath) async {
-    if (!Platform.isAndroid && !Platform.isIOS && !Platform.isMacOS && !Platform.isLinux) {
-      return null;
-    }
     try {
       final file = File(filePath);
-      final metadata = await MetadataRetriever.fromFile(file);
-      return metadata.albumArt;
+      if (!await file.exists()) return null;
+
+      final metadata = await readMetadata(file);
+      return metadata.pictures.isNotEmpty ? metadata.pictures.first.bytes : null;
     } catch (e) {
       _logger.w('Failed to extract album art for $filePath: $e');
       return null;
