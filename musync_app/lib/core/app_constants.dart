@@ -6,13 +6,18 @@ class AppConstants {
   AppConstants._(); // Prevent instantiation
 
   // ── App Info ──────────────────────────────────────────
-  static const String appVersion = '0.1.36';
+  static const String appVersion = '0.1.39';
   static const String appName = 'MusyncMIMO';
 
   // ── Network ───────────────────────────────────────────
   static const int defaultWebSocketPort = 7890;
   static const String webSocketPath = '/musync';
   static const bool useTls = true;
+  /// Expected SHA-1 fingerprint of the host's self-signed certificate.
+  /// Set this before connecting to enable certificate pinning (CRIT-001 fix).
+  /// Format: colon-separated hex bytes, e.g. 'AB:CD:EF:...'
+  /// Empty string = accept any certificate (legacy mode, NOT recommended).
+  static const String expectedCertFingerprint = '';
   static const String mdnsServiceType = '_musync._tcp';
   static const String mdnsMulticastAddress = '224.0.0.251';
   static const int mdnsPort = 5353;
@@ -58,6 +63,8 @@ class AppConstants {
   static const int fileWaitRetryDelayMs = 500;
   static const int lateCompensationThresholdMs = 5000;
   static const int lateCompensationMaxCompensationMs = 30000;
+  /// Session PIN length (digits). Used for WebSocket join authentication (CRIT-002 fix).
+  static const int sessionPinLength = 6;
 
   // ── Discovery ─────────────────────────────────────────
   static const int tcpScanBatchSize = 10; // Reduced from 20 to avoid port exhaustion (MED-002 fix)

@@ -177,6 +177,7 @@ class _MusyncAppState extends State<MusyncApp> {
           BlocProvider(
             create: (_) => PlayerBloc(
               sessionManager: widget.sessionManager,
+              audioEngine: widget.sessionManager.audioEngine, // HIGH-008 fix
               prefs: widget.prefs,
             ),
           ),

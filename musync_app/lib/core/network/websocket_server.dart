@@ -1,10 +1,15 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
+
 import 'package:basic_utils/basic_utils.dart';
 import 'package:logger/logger.dart';
+import 'package:path_provider/path_provider.dart';
+
 import '../app_constants.dart';
+import '../models/device_info.dart';
 import '../models/models.dart';
+import '../models/protocol_message.dart';
 import 'clock_sync.dart';
 
 /// Represents a connected slave device.
@@ -39,6 +44,10 @@ class WebSocketServer {
   final int port;
   final Logger _logger;
   final String sessionId;
+  /// Session PIN for join authentication (CRIT-002 fix).
+  final String sessionPin;
+  /// HIGH-004 fix: Local IP to bind to (instead of anyIPv4).
+  final String? localIp;
 
   HttpServer? _server;
   final Map<String, ConnectedSlave> _slaves = {};
@@ -55,8 +64,18 @@ class WebSocketServer {
   WebSocketServer({
     required this.port,
     required this.sessionId,
+    String? sessionPin,
+    this.localIp,
     Logger? logger,
-  }) : _logger = logger ?? Logger();
+  })  : sessionPin = sessionPin ?? _generatePin(),
+        _logger = logger ?? Logger();
+
+  /// Generate a random numeric PIN for session authentication.
+  static String _generatePin() {
+    final random = DateTime.now().millisecondsSinceEpoch;
+    final pin = (random % 900000 + 100000).toString(); // 6-digit PIN
+    return pin;
+  }
 
   // ── Public API ──
 
@@ -72,16 +91,26 @@ class WebSocketServer {
   /// Start the WebSocket server.
   Future<void> start() async {
     try {
+      // HIGH-004 fix: Bind to specific local IP if provided, otherwise fallback to anyIPv4
+      final bindAddress = localIp != null
+          ? InternetAddress(localIp!)
+          : InternetAddress.anyIPv4;
+      if (localIp != null) {
+        _logger.i('Binding to local IP: $localIp (HIGH-004 fix)');
+      } else {
+        _logger.w('⚠️ No local IP provided — binding to anyIPv4 (HIGH-004)');
+      }
+
       if (AppConstants.useTls) {
         final securityContext = await _createSecurityContext();
         _server = await HttpServer.bindSecure(
-          InternetAddress.anyIPv4,
+          bindAddress,
           port,
           securityContext,
         );
         _logger.i('WebSocket server (WSS) started on port $port');
       } else {
-        _server = await HttpServer.bind(InternetAddress.anyIPv4, port);
+        _server = await HttpServer.bind(bindAddress, port);
         _logger.i('WebSocket server started on port $port');
       }
 
@@ -99,20 +128,55 @@ class WebSocketServer {
   }
 
   /// Create a SecurityContext with a self-signed certificate for WSS.
+  /// HIGH-005 fix: Persist certificate across restarts so clients can pin it.
   Future<SecurityContext> _createSecurityContext() async {
-    final keyPair = CryptoUtils.generateRSAKeyPair();
-    final privateKey = keyPair.privateKey as RSAPrivateKey;
-    final publicKey = keyPair.publicKey as RSAPublicKey;
+    final appDir = await getApplicationDocumentsDirectory();
+    final certDir = Directory('${appDir.path}/.musync_certs');
+    if (!await certDir.exists()) {
+      await certDir.create(recursive: true);
+    }
 
-    final dn = {
-      'CN': 'musync.local',
-      'O': 'MusyncMIMO',
-      'C': 'US',
-    };
+    final certFile = File('${certDir.path}/server.pem');
+    final keyFile = File('${certDir.path}/server.key');
 
-    final csr = X509Utils.generateRsaCsrPem(dn, privateKey, publicKey);
-    final certificatePem = X509Utils.generateSelfSignedCertificate(privateKey, csr, 3650);
-    final privateKeyPem = CryptoUtils.encodeRSAPrivateKeyToPem(privateKey);
+    String? certificatePem;
+    String? privateKeyPem;
+
+    // Try to load existing certificate
+    if (await certFile.exists() && await keyFile.exists()) {
+      try {
+        certificatePem = await certFile.readAsString();
+        privateKeyPem = await keyFile.readAsString();
+        _logger.i('Loaded existing TLS certificate from disk');
+      } catch (e) {
+        _logger.w('Failed to load existing certificate, generating new one: $e');
+        certificatePem = null;
+        privateKeyPem = null;
+      }
+    }
+
+    // Generate new certificate if none exists
+    if (certificatePem == null || privateKeyPem == null) {
+      _logger.i('Generating new self-signed TLS certificate');
+      final keyPair = CryptoUtils.generateRSAKeyPair();
+      final privateKey = keyPair.privateKey as RSAPrivateKey;
+      final publicKey = keyPair.publicKey as RSAPublicKey;
+
+      final dn = {
+        'CN': 'musync.local',
+        'O': 'MusyncMIMO',
+        'C': 'US',
+      };
+
+      final csr = X509Utils.generateRsaCsrPem(dn, privateKey, publicKey);
+      certificatePem = X509Utils.generateSelfSignedCertificate(privateKey, csr, 3650);
+      privateKeyPem = CryptoUtils.encodeRSAPrivateKeyToPem(privateKey);
+
+      // Persist to disk
+      await certFile.writeAsString(certificatePem);
+      await keyFile.writeAsString(privateKeyPem);
+      _logger.i('TLS certificate saved to ${certDir.path}');
+    }
 
     final context = SecurityContext()
       ..usePrivateKeyBytes(privateKeyPem.codeUnits)
@@ -298,6 +362,12 @@ class WebSocketServer {
   void _handleMessage(WebSocket socket, dynamic data) {
     try {
       if (data is String) {
+        // HIGH-001 fix: Validate message size before decoding
+        if (data.length > AppConstants.maxMessageSizeBytes) {
+          _logger.w('Message too large: ${data.length} bytes (max: ${AppConstants.maxMessageSizeBytes})');
+          socket.add(ProtocolMessage.reject(reason: 'Message too large').encode());
+          return;
+        }
         // Handle JSON message
         final message = ProtocolMessage.decode(data);
 
@@ -367,6 +437,16 @@ class WebSocketServer {
       socket.close();
       return;
     }
+
+    // CRIT-002 fix: Verify session PIN
+    final providedPin = message.payload['session_pin'] as String?;
+    if (providedPin == null || providedPin != sessionPin) {
+      _logger.w('Join rejected: invalid session PIN');
+      socket.add(ProtocolMessage.reject(reason: 'Invalid session PIN').encode());
+      socket.close();
+      return;
+    }
+
     final device = DeviceInfo.fromJson(deviceJson);
 
     // Reject if session is full (HIGH-014 fix)

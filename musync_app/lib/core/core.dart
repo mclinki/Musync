@@ -5,6 +5,7 @@ export 'network/websocket_client.dart';
 export 'network/device_discovery.dart';
 export 'audio/audio_engine.dart';
 export 'session/session_manager.dart';
+export 'session/playback_coordinator.dart';
 export 'models/models.dart';
 export 'context/event_store.dart';
 export 'context/context_manager.dart';

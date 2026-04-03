@@ -370,6 +370,14 @@ class DeviceDiscovery {
     }
   }
 
+  /// HIGH-007 fix: Return a truncated/obfuscated device ID for mDNS broadcast.
+  String _shortDeviceId() {
+    if (deviceId.length <= 4) return deviceId;
+    // Keep first 4 chars + hash of rest
+    final hash = deviceId.hashCode.abs().toRadixString(16).substring(0, 4);
+    return '${deviceId.substring(0, 4)}$hash';
+  }
+
   /// Build an mDNS response packet for our service.
   Uint8List _buildMdnsResponse({required int port}) {
     final serviceName = '$kMdnsServiceType.local';
@@ -430,11 +438,11 @@ class DeviceDiscovery {
     _writeUint16(txtBuilder, 0); // Placeholder
 
     // TXT records: key=value pairs
+    // HIGH-007 fix: Only broadcast minimal info in mDNS (visible to entire network)
+    // Full device details are exchanged via TCP probe (requires active connection)
     final txtRecords = [
-      'device_id=$deviceId',
-      'device_name=$deviceName',
-      'device_type=$deviceType',
-      'app_version=$kAppVersion',
+      'id=${_shortDeviceId()}', // Truncated/obfuscated ID
+      'v=$kAppVersion',
     ];
     for (final record in txtRecords) {
       final recordBytes = Uint8List.fromList(record.codeUnits);
@@ -518,8 +526,10 @@ class DeviceDiscovery {
         client.listen((data) {
           final message = String.fromCharCodes(data).trim();
           if (message == 'MUSYNC_PROBE') {
+            // HIGH-007 fix: Only return minimal info via TCP probe
+            // Full device details exchanged via WebSocket after PIN auth
             final response =
-                'MUSYNC_RESPONSE|$deviceId|$deviceName|$deviceType|$port';
+                'MUSYNC_RESPONSE|${_shortDeviceId()}|$port';
             client.write(response);
             _logger.d('Responded to TCP discovery probe');
           }
@@ -737,16 +747,19 @@ class DeviceDiscovery {
 
       if (message.startsWith('MUSYNC_RESPONSE|')) {
         final parts = message.split('|');
-        if (parts.length >= 5) {
+        // HIGH-007 fix: Support both old format (5 parts) and new minimal format (3 parts)
+        if (parts.length >= 3) {
           final devId = parts[1];
-          final devName = parts[2];
-          final devType = parts[3];
-          final devPort = int.tryParse(parts[4]) ?? kDefaultPort;
+          final devPort = parts.length >= 5
+              ? (int.tryParse(parts[4]) ?? kDefaultPort) // Old format
+              : (int.tryParse(parts[2]) ?? kDefaultPort); // New minimal format
+          final devName = parts.length >= 5 ? parts[2] : 'Musync Device';
+          final devType = parts.length >= 5 ? parts[3] : 'unknown';
 
           final device = DeviceInfo(
             id: devId,
             name: devName,
-            type: DeviceType.fromString(devType),
+            type: devType != 'unknown' ? DeviceType.fromString(devType) : DeviceType.phone,
             ip: ip,
             port: devPort,
             discoveredAt: DateTime.now(),

@@ -118,11 +118,13 @@ class ProtocolMessage {
 
   factory ProtocolMessage.join({
     required DeviceInfo device,
+    String? sessionPin,
   }) {
     return ProtocolMessage(
       type: MessageType.join,
       payload: {
         'device': device.toJson(),
+        if (sessionPin != null) 'session_pin': sessionPin,
       },
     );
   }

@@ -64,9 +64,10 @@ class _PlayerView extends StatelessWidget {
 
                 const SizedBox(height: 32),
 
-                // Position slider
+                // Position slider — HIGH-011 fix: listen directly to position stream
+                // instead of going through BLoC state (avoids full tree rebuilds at 5Hz)
                 PositionSlider(
-                  position: state.position,
+                  positionStream: sessionManager.audioEngine.positionStream,
                   duration: state.duration,
                   onSeek: (position) {
                     context.read<PlayerBloc>().add(SeekRequested(position));

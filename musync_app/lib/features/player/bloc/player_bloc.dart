@@ -275,6 +275,8 @@ enum PlayerStatus {
 
 class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
   final SessionManager sessionManager;
+  /// HIGH-008 fix: Direct AudioEngine injection (Law of Demeter).
+  final AudioEngine audioEngine;
   final FirebaseService _firebase;
   final Logger _logger;
   final SharedPreferences? _prefs;
@@ -288,8 +290,13 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
   StreamSubscription? _connectedDevicesSub;
   StreamSubscription? _allGuestsReadySub;
 
-  PlayerBloc({required this.sessionManager, FirebaseService? firebase, Logger? logger, SharedPreferences? prefs})
-      : _firebase = firebase ?? FirebaseService(),
+  PlayerBloc({
+    required this.sessionManager,
+    required this.audioEngine,
+    FirebaseService? firebase,
+    Logger? logger,
+    SharedPreferences? prefs,
+  })  : _firebase = firebase ?? FirebaseService(),
         _logger = logger ?? Logger(),
         _prefs = prefs,
         super(const PlayerState()) {
@@ -316,7 +323,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     on<VolumeRemoteChanged>(_onVolumeRemoteChanged);
 
     // Listen to audio engine state (single subscription)
-    _stateSub = sessionManager.audioEngine.stateStream.listen((audioState) {
+    _stateSub = audioEngine.stateStream.listen((audioState) {
       if (_isClosed) return;
       add(AudioStateChanged(audioState));
       // Detect track completion: state goes to idle while we were playing
@@ -327,7 +334,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     });
 
     _positionSub =
-        sessionManager.audioEngine.positionStream.listen((position) {
+        audioEngine.positionStream.listen((position) {
       if (_isClosed) return;
       add(PositionUpdated(position));
     });
@@ -438,7 +445,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
   ) async {
     emit(state.copyWith(status: PlayerStatus.loading, errorMessage: null));
     try {
-      await sessionManager.audioEngine.loadTrack(event.track);
+      await audioEngine.loadTrack(event.track);
 
       final duration = await _waitForDuration();
 
@@ -470,7 +477,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     if (state.playlist.isEmpty && state.currentTrack == null) {
       emit(state.copyWith(status: PlayerStatus.loading, errorMessage: null));
       try {
-        await sessionManager.audioEngine.loadTrack(event.track);
+        await audioEngine.loadTrack(event.track);
         final duration = await _waitForDuration();
         final playlist = Playlist(tracks: [event.track], currentIndex: 0);
         emit(state.copyWith(
@@ -535,7 +542,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
         if (sessionManager.role == DeviceRole.host) {
           await sessionManager.pausePlayback();
         }
-        await sessionManager.audioEngine.stop();
+        await audioEngine.stop();
       } catch (e) {
         _logger.w('Error stopping after track removal: $e');
       }
@@ -563,7 +570,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
       if (sessionManager.role == DeviceRole.host) {
         await sessionManager.pausePlayback();
       }
-      await sessionManager.audioEngine.stop();
+      await audioEngine.stop();
     } catch (e) {
       _logger.w('Error stopping on clear: $e');
     }
@@ -589,7 +596,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     try {
       // Determine if this is a true resume (same track already loaded and paused)
       // or a fresh play (track loaded but never played, or different track)
-      final audioTrack = sessionManager.audioEngine.currentTrack;
+      final audioTrack = audioEngine.currentTrack;
       final isTrueResume = state.status == PlayerStatus.paused &&
           audioTrack != null &&
           audioTrack.source == track.source;
@@ -599,7 +606,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
         if (sessionManager.role == DeviceRole.host) {
           await sessionManager.resumePlayback();
         } else {
-          await sessionManager.audioEngine.play();
+          await audioEngine.play();
           // Notify host that guest resumed (SYNC 2 fix)
           sessionManager.sendToHost(ProtocolMessage.guestResume());
         }
@@ -608,7 +615,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
         if (sessionManager.role == DeviceRole.host) {
           await sessionManager.playTrack(track, playlist: state.playlist);
         } else {
-          await sessionManager.audioEngine.play();
+          await audioEngine.play();
         }
       }
       emit(state.copyWith(status: PlayerStatus.playing, errorMessage: null));
@@ -629,9 +636,9 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
       if (sessionManager.role == DeviceRole.host) {
         await sessionManager.pausePlayback();
       } else {
-        await sessionManager.audioEngine.pause();
+        await audioEngine.pause();
         // Notify host that guest paused (SYNC 2 fix)
-        final positionMs = sessionManager.audioEngine.position.inMilliseconds;
+        final positionMs = audioEngine.position.inMilliseconds;
         sessionManager.sendToHost(ProtocolMessage.guestPause(positionMs: positionMs));
       }
       emit(state.copyWith(status: PlayerStatus.paused));
@@ -654,7 +661,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
       if (sessionManager.role == DeviceRole.host) {
         await sessionManager.pausePlayback();
       }
-      await sessionManager.audioEngine.stop();
+      await audioEngine.stop();
       emit(state.copyWith(status: PlayerStatus.idle, position: Duration.zero));
     } catch (e, stack) {
       _logger.e('Stop failed: $e');
@@ -682,7 +689,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     if (sessionManager.role == DeviceRole.slave) {
       _logger.i('Guest skip next: waiting for host play command');
       try {
-        await sessionManager.audioEngine.pause();
+        await audioEngine.pause();
       } catch (e) {
         _logger.d('Guest skip next pause failed: $e');
       }
@@ -699,7 +706,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     _savePlaylist();
 
     try {
-      await sessionManager.audioEngine.loadTrack(nextTrack);
+      await audioEngine.loadTrack(nextTrack);
       final duration = await _waitForDuration();
 
       await sessionManager.playTrack(nextTrack, playlist: nextPlaylist);
@@ -724,7 +731,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
   ) async {
     // If more than skipPreviousRestartThresholdSeconds into the track, restart it instead of going to previous
     if (state.position.inSeconds > AppConstants.skipPreviousRestartThresholdSeconds) {
-      await sessionManager.audioEngine.seek(Duration.zero);
+      await audioEngine.seek(Duration.zero);
       emit(state.copyWith(position: Duration.zero));
       return;
     }
@@ -732,7 +739,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     final prevPlaylist = state.playlist.skipPrevious();
     if (prevPlaylist == null) {
       // At the beginning, just restart current track
-      await sessionManager.audioEngine.seek(Duration.zero);
+      await audioEngine.seek(Duration.zero);
       emit(state.copyWith(position: Duration.zero));
       return;
     }
@@ -743,7 +750,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     if (sessionManager.role == DeviceRole.slave) {
       _logger.i('Guest skip prev: waiting for host play command');
       try {
-        await sessionManager.audioEngine.pause();
+        await audioEngine.pause();
       } catch (e) {
         _logger.d('Guest skip prev pause failed: $e');
       }
@@ -760,7 +767,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     _savePlaylist();
 
     try {
-      await sessionManager.audioEngine.loadTrack(prevTrack);
+      await audioEngine.loadTrack(prevTrack);
       final duration = await _waitForDuration();
 
       await sessionManager.playTrack(prevTrack, playlist: prevPlaylist);
@@ -784,7 +791,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     Emitter<PlayerState> emit,
   ) async {
     try {
-      await sessionManager.audioEngine.seek(event.position);
+      await audioEngine.seek(event.position);
       emit(state.copyWith(position: event.position));
     } catch (e, stack) {
       _logger.e('Seek failed: $e');
@@ -800,7 +807,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     Emitter<PlayerState> emit,
   ) async {
     try {
-      await sessionManager.audioEngine.setVolume(event.volume);
+      await audioEngine.setVolume(event.volume);
       emit(state.copyWith(volume: event.volume));
       // Broadcast volume to slaves if host
       if (sessionManager.role == DeviceRole.host) {
@@ -826,7 +833,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     AudioStateChanged event,
     Emitter<PlayerState> emit,
   ) {
-    final duration = sessionManager.audioEngine.duration;
+    final duration = audioEngine.duration;
 
     switch (event.state) {
       case AudioEngineState.idle:
@@ -866,14 +873,14 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
       _logger.i('Repeat one: replaying current track');
       emit(state.copyWith(status: PlayerStatus.playing, position: Duration.zero));
       try {
-        await sessionManager.audioEngine.seek(Duration.zero);
+        await audioEngine.seek(Duration.zero);
         if (sessionManager.role == DeviceRole.host) {
           await sessionManager.playTrack(
             playlist.tracks[currentIndex],
             playlist: playlist,
           );
         } else {
-          await sessionManager.audioEngine.play();
+          await audioEngine.play();
         }
       } catch (e) {
         _logger.e('Repeat one replay failed: $e');
@@ -898,12 +905,12 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
       ));
       _savePlaylist();
       try {
-        await sessionManager.audioEngine.loadTrack(firstTrack);
+        await audioEngine.loadTrack(firstTrack);
         final duration = await _waitForDuration();
         if (sessionManager.role == DeviceRole.host) {
           await sessionManager.playTrack(firstTrack, playlist: loopedPlaylist);
         } else {
-          await sessionManager.audioEngine.play();
+          await audioEngine.play();
         }
         emit(state.copyWith(
           status: PlayerStatus.playing,
@@ -997,7 +1004,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     Emitter<PlayerState> emit,
   ) {
     emit(state.copyWith(volume: event.volume));
-    sessionManager.audioEngine.setVolume(event.volume);
+    audioEngine.setVolume(event.volume);
     _logger.i('Remote volume set to: ${event.volume}');
   }
 
@@ -1022,7 +1029,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
   Future<Duration?> _waitForDuration({
     Duration timeout = const Duration(seconds: 5),
   }) async {
-    final engine = sessionManager.audioEngine;
+    final engine = audioEngine;
 
     // If duration is already available, return immediately
     if (engine.duration != null) return engine.duration;

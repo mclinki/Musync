@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:logger/logger.dart';
 import '../app_constants.dart';
@@ -13,7 +12,7 @@ import '../context/context_manager.dart';
 import '../services/file_transfer_service.dart';
 import '../services/foreground_service.dart';
 import '../services/firebase_service.dart';
-import '../utils/format.dart';
+import 'playback_coordinator.dart';
 
 /// High-level session manager that orchestrates all components.
 ///
@@ -33,6 +32,8 @@ class SessionManager {
   late final ForegroundService _foregroundService;
   late final EventStore _eventStore;
   late final ContextManager _contextManager;
+  /// CRIT-005 fix: Extracted playback coordination into dedicated class.
+  late final PlaybackCoordinator _playback;
 
   WebSocketServer? _server;
   WebSocketClient? _client;
@@ -85,6 +86,13 @@ class SessionManager {
     _foregroundService = ForegroundService(logger: _logger);
     _eventStore = EventStore(logger: _logger);
     _contextManager = ContextManager(eventStore: _eventStore, logger: _logger);
+    // CRIT-005 fix: Initialize extracted PlaybackCoordinator
+    _playback = PlaybackCoordinator(
+      audioEngine: _audioEngine,
+      fileTransfer: _fileTransfer,
+      contextManager: _contextManager,
+      logger: _logger,
+    );
   }
 
   /// Set the Firebase service for analytics tracking (optional).
@@ -117,6 +125,10 @@ class SessionManager {
 
   /// Local IP address.
   String? get localIp => _localIp;
+
+  /// Session PIN for out-of-band authentication (CRIT-002 fix).
+  /// Only available when hosting. Null when not hosting.
+  String? get sessionPin => _server?.sessionPin;
 
   /// Audio engine for direct control.
   AudioEngine get audioEngine => _audioEngine;
@@ -281,9 +293,16 @@ class SessionManager {
     _server = WebSocketServer(
       port: port,
       sessionId: _currentSession!.sessionId,
+      localIp: _localIp, // HIGH-004 fix: bind to local IP
       logger: _logger,
     );
+    _logger.i('Session PIN: ${_server!.sessionPin}'); // CRIT-002: Display for out-of-band sharing
     await _server!.start();
+
+    // CRIT-005 fix: Wire up playback coordinator
+    _playback.setServer(_server);
+    _playback.setSession(_currentSession);
+    _playback.setRole(_role);
 
     // Listen to server events
     _subscriptions.add(
@@ -330,6 +349,7 @@ class SessionManager {
   Future<bool> joinSession({
     required String hostIp,
     int hostPort = kDefaultPort,
+    String? sessionPin, // CRIT-002 fix: Session PIN for authentication
   }) async {
     if (!_isInitialized) {
       _logger.e('Cannot join session: SessionManager not initialized');
@@ -347,6 +367,7 @@ class SessionManager {
     _client = WebSocketClient(
       hostIp: hostIp,
       hostPort: hostPort,
+      sessionPin: sessionPin, // CRIT-002 fix
       logger: _logger,
     );
 
@@ -367,6 +388,10 @@ class SessionManager {
     if (!synced) {
       _logger.w('Clock sync failed, continuing anyway');
     }
+
+    // CRIT-005 fix: Wire up playback coordinator
+    _playback.setClient(_client);
+    _playback.setRole(_role);
 
     // Start auto-calibration to keep clocks in sync
     _client!.clockSync.startAutoCalibration();
@@ -416,180 +441,19 @@ class SessionManager {
 
   /// Start playing a track (host only).
   Future<void> playTrack(AudioTrack track, {int delayMs = AppConstants.defaultPlayDelayMs, Playlist? playlist}) async {
-    if (_role != DeviceRole.host) {
-      throw Exception('Only the host can start playback');
-    }
-    if (_server == null) {
-      throw Exception('Server not initialized');
-    }
-
-    _logger.i('=== HOST PLAY TRACK ===');
-    _logger.i('track: ${track.title}');
-    _logger.i('source: ${track.source}');
-    _logger.i('sourceType: ${track.sourceType}');
-
-    // If it's a local file and we have slaves, send the file first
-    String trackSource = track.source;
-    
-    if (track.sourceType == AudioSourceType.localFile && _server!.slaveCount > 0) {
-      _logger.i('=== SENDING FILE TO SLAVES ===');
-      _logger.i('Slaves count: ${_server!.slaveCount}');
-      
-      final sent = await _fileTransfer.sendFile(
-        filePath: track.source,
-        server: _server!,
-      );
-      
-      if (sent) {
-        _logger.i('File sent successfully to all slaves');
-        // Send just the filename so slaves can find it in their cache
-        trackSource = extractFileName(track.source);
-        _logger.i('Broadcasting filename: $trackSource');
-        
-        // Reduced wait time for slaves to save the file
-        await Future.delayed(const Duration(milliseconds: AppConstants.fileTransferWaitDelayMs));
-      } else {
-        _logger.w('Failed to send file, slaves may not be able to play');
-      }
-    }
-
-    // Load track locally
-    _logger.d('Loading track locally on host...');
-    await _audioEngine.loadTrack(track);
-
-    // Send prepare command to slaves for pre-loading
-    if (_server!.slaveCount > 0) {
-      _logger.i('=== BROADCASTING PREPARE COMMAND ===');
-      await _server!.broadcastPrepare(
-        trackSource: trackSource,
-        sourceType: track.sourceType,
-      );
-      // Wait a bit for slaves to preload
-      await Future.delayed(const Duration(milliseconds: AppConstants.prepareBroadcastDelayMs));
-    }
-
-    // Broadcast to slaves (they will load and play)
-    _logger.i('=== BROADCASTING PLAY COMMAND ===');
-    await _server!.broadcastPlay(
-      trackSource: trackSource,
-      sourceType: track.sourceType,
-      delayMs: delayMs,
-    );
-
-    // Play locally
-    await Future.delayed(Duration(milliseconds: delayMs));
-    await _audioEngine.play();
-
-    _currentSession = _currentSession?.copyWith(
-      state: SessionState.playing,
-      currentTrack: track,
-      startedAt: DateTime.now(),
-    );
-
-    // Record playback event for context
-    await _contextManager.recordEvent(SessionEvent(
-      sessionId: _currentSession?.sessionId ?? '',
-      type: EventType.playbackStarted,
-      data: {'track': track.toJson()},
-      timestamp: DateTime.now(),
-    ));
-
-    _firebase?.logTrackPlay(
-      trackTitle: track.title,
-      sourceType: track.sourceType.name,
-    );
-
-    // Broadcast playlist update to slaves
-    if (_server!.slaveCount > 0 && playlist != null) {
-      await _server!.broadcastPlaylistUpdate(
-        tracks: playlist.tracks.map((t) => {
-          'title': t.title,
-          'artist': t.artist,
-          'source': t.source,
-          'sourceType': t.sourceType.name,
-        }).toList(),
-        currentIndex: playlist.currentIndex,
-      );
-    }
-
+    await _playback.playTrack(track, delayMs: delayMs, playlist: playlist);
     _emitState(SessionManagerState.playing);
   }
 
   /// Pause playback (host only).
   Future<void> pausePlayback() async {
-    if (_role != DeviceRole.host) {
-      throw Exception('Only the host can control playback');
-    }
-    if (_server == null) {
-      throw Exception('Server not initialized');
-    }
-
-    final positionMs = _audioEngine.position.inMilliseconds;
-
-    await _audioEngine.pause();
-    await _server!.broadcastPause(positionMs: positionMs);
-
-    _currentSession = _currentSession?.copyWith(state: SessionState.paused);
-
-    // Record pause event for context
-    await _contextManager.recordEvent(SessionEvent(
-      sessionId: _currentSession?.sessionId ?? '',
-      type: EventType.playbackPaused,
-      data: {'position_ms': positionMs},
-      timestamp: DateTime.now(),
-    ));
-
+    await _playback.pausePlayback();
     _emitState(SessionManagerState.paused);
   }
 
   /// Resume playback (host only).
   Future<void> resumePlayback({int delayMs = AppConstants.resumeDelayMs}) async {
-    if (_role != DeviceRole.host) {
-      throw Exception('Only the host can control playback');
-    }
-    if (_server == null) {
-      throw Exception('Server not initialized');
-    }
-
-    // BUG-7 FIX: Fall back to audio engine's current track if session track is null
-    // (happens on first play after loadTrack, since only BLoC state has the track)
-    AudioTrack? track = _currentSession?.currentTrack;
-    track ??= _audioEngine.currentTrack;
-    if (track == null) {
-      _logger.w('resumePlayback: no track to resume');
-      return;
-    }
-
-    final positionMs = _audioEngine.position.inMilliseconds;
-
-    // Use filename for local files (guests have the file in cache by filename)
-    String trackSource = track.source;
-    if (track.sourceType == AudioSourceType.localFile) {
-      trackSource = extractFileName(track.source);
-    }
-
-    await _server!.broadcastPlay(
-      trackSource: trackSource,
-      sourceType: track.sourceType,
-      delayMs: delayMs,
-      seekPositionMs: positionMs,
-    );
-
-    await Future.delayed(Duration(milliseconds: delayMs));
-    await _audioEngine.play();
-
-    _currentSession = _currentSession?.copyWith(
-      state: SessionState.playing,
-      currentTrack: track,
-    );
-
-    // Record resume event for context
-    await _contextManager.recordEvent(SessionEvent(
-      sessionId: _currentSession?.sessionId ?? '',
-      type: EventType.playbackResumed,
-      timestamp: DateTime.now(),
-    ));
-
+    await _playback.resumePlayback(delayMs: delayMs);
     _emitState(SessionManagerState.playing);
   }
 
@@ -600,8 +464,7 @@ class SessionManager {
     String? repeatMode,
     bool? isShuffled,
   }) {
-    if (_role != DeviceRole.host || _server == null || _server!.slaveCount == 0) return;
-    _server!.broadcastPlaylistUpdate(
+    _playback.broadcastPlaylistUpdate(
       tracks: tracks,
       currentIndex: currentIndex,
       repeatMode: repeatMode,
@@ -610,32 +473,8 @@ class SessionManager {
   }
 
   /// Sync a track to slaves without playing it (host only).
-  /// Sends the file and broadcasts a prepare command so slaves can preload.
   Future<void> syncTrackToSlaves(AudioTrack track) async {
-    if (_role != DeviceRole.host) return;
-    if (_server == null || _server!.slaveCount == 0) return;
-    if (track.sourceType != AudioSourceType.localFile) return;
-
-    _logger.i('Syncing track to slaves: ${track.title}');
-
-    String trackSource = track.source;
-    final sent = await _fileTransfer.sendFile(
-      filePath: track.source,
-      server: _server!,
-    );
-
-    if (sent) {
-      trackSource = extractFileName(track.source);
-      _logger.i('File sent, broadcasting prepare for: $trackSource');
-      // Wait for slaves to save the file before sending prepare
-      await Future.delayed(const Duration(milliseconds: AppConstants.fileTransferWaitDelayMs));
-      await _server!.broadcastPrepare(
-        trackSource: trackSource,
-        sourceType: track.sourceType,
-      );
-    } else {
-      _logger.w('Failed to sync track to slaves');
-    }
+    await _playback.syncTrackToSlaves(track);
   }
 
   /// Rename the current session (host only).
@@ -709,6 +548,14 @@ class SessionManager {
     _role = DeviceRole.none;
     _currentSession = null;
     _contextManager.clearContext();
+
+    // CRIT-005 fix: Clear playback coordinator state
+    _playback.setServer(null);
+    _playback.setClient(null);
+    _playback.setSession(null);
+    _playback.setRole(DeviceRole.none);
+    _playback.cachedFilePath = null;
+
     _emitState(SessionManagerState.idle);
 
     _logger.i('Left session');
@@ -780,6 +627,7 @@ class SessionManager {
     await _discovery?.dispose();
     await _audioEngine.dispose();
     await _fileTransfer.dispose();
+    await _playback.dispose();
     await _contextManager.dispose();
     await _eventStore.dispose();
     await _stateController.close();
@@ -921,300 +769,28 @@ class SessionManager {
     }
   }
 
+  // ── Event Handlers (delegated to PlaybackCoordinator — CRIT-005 fix) ──
+
   Future<void> _handlePrepareCommand(ClientEvent event) async {
-    if (event.trackSource == null) {
-      _logger.w('Received prepare command with null trackSource, skipping');
-      return;
-    }
-
-    _logger.i('=== PREPARE COMMAND RECEIVED ===');
-    _logger.i('trackSource: ${event.trackSource}');
-    _logger.i('sourceType: ${event.sourceType}');
-
-    String trackSource = event.trackSource!;
-
-    // If it's a local file, check if we have it in cache
-    if (event.sourceType == AudioSourceType.localFile) {
-      final cachePath = _fileTransfer.cachePath;
-      if (cachePath == null) {
-        _logger.w('No cache path available for prepare');
-        return;
-      }
-      final cachedPath = '$cachePath/$trackSource';
-      final cachedFile = File(cachedPath);
-
-      // Retry a few times in case file transfer is still in progress
-      bool found = false;
-      for (int i = 0; i < 5; i++) {
-        if (await cachedFile.exists()) {
-          trackSource = cachedPath;
-          _logger.d('File found in cache: $trackSource');
-          found = true;
-          break;
-        }
-        if (i < 4) {
-          _logger.d('File not in cache yet, retrying... (${i + 1}/5)');
-          await Future.delayed(const Duration(milliseconds: 500));
-        }
-      }
-
-      if (!found) {
-        _logger.w('File not in cache after retries, will check on play');
-        return;
-      }
-    }
-
-    final track = event.sourceType == AudioSourceType.localFile
-        ? await AudioTrack.fromFilePathWithMetadata(trackSource)
-        : AudioTrack.fromUrl(trackSource);
-
-    // Preload the track for faster playback
-    await _audioEngine.preloadTrack(track);
-    _logger.i('Track preloaded: ${track.title}');
+    await _playback.handlePrepareCommand(event);
   }
 
   Future<void> _handlePlayCommand(ClientEvent event) async {
-    if (event.trackSource == null) {
-      _logger.w('Received play command with null trackSource, skipping');
-      return;
-    }
-
-    _logger.i('=== RECEIVED PLAY COMMAND ===');
-    _logger.i('trackSource: ${event.trackSource}');
-    _logger.i('sourceType: ${event.sourceType}');
-    _logger.i('seekPositionMs: ${event.seekPositionMs}');
-    _logger.i('startAtMs: ${event.startAtMs}');
-
-    String trackSource = event.trackSource!;
-    
-    // If it's a local file, we need to find it in cache
-    if (event.sourceType == AudioSourceType.localFile) {
-      _logger.d('Looking for cached file...');
-      String? cachedPath;
-      
-      // First check if we already have the cached path
-      if (_cachedFilePath != null) {
-        final file = File(_cachedFilePath!);
-        if (await file.exists()) {
-          cachedPath = _cachedFilePath;
-          _logger.d('Using cached path from memory: $cachedPath');
-        }
-      }
-      
-      // If not, try to find the file in the cache directory
-      if (cachedPath == null) {
-        final cachePath = _fileTransfer.cachePath;
-        if (cachePath != null) {
-          final cachedFile = '$cachePath/${event.trackSource!}';
-          final file = File(cachedFile);
-          _logger.d('Checking cache file: $cachedFile');
-          
-          // Wait up to 5 seconds for the file to appear (file transfer might be in progress)
-          for (int i = 0; i < AppConstants.fileWaitRetryCount; i++) {
-            if (await file.exists()) {
-              cachedPath = cachedFile;
-              _logger.d('Found cached file after ${i + 1} attempt(s)');
-              break;
-            }
-            _logger.d('Waiting for file... attempt ${i + 1}/${AppConstants.fileWaitRetryCount}');
-            await Future.delayed(const Duration(milliseconds: AppConstants.fileWaitRetryDelayMs));
-          }
-        } else {
-          _logger.e('No cache path available!');
-        }
-      }
-      
-      if (cachedPath != null) {
-        trackSource = cachedPath;
-        _logger.i('Using cached file: $trackSource');
-      } else {
-        _logger.e('!!! FILE NOT FOUND !!!');
-        _logger.e('Event trackSource was: ${event.trackSource}');
-        _logger.e('Cache path: ${_fileTransfer.cachePath}');
-        _logger.e('Cached file path from memory: $_cachedFilePath');
-        // List files in cache directory for debugging
-        final cacheDir = _fileTransfer.cachePath != null ? Directory(_fileTransfer.cachePath!) : null;
-        if (cacheDir != null && await cacheDir.exists()) {
-          final files = await cacheDir.list().toList();
-          _logger.e('Files in cache dir: ${files.map((f) => f.path).join(', ')}');
-        } else {
-          _logger.e('Cache directory does not exist');
-        }
-        _logger.w('File not received yet, skipping playback');
-        return; // Don't emit error, just skip
-      }
-    } else {
-      _logger.d('Source is URL, no file transfer needed');
-    }
-
-    final track = event.sourceType == AudioSourceType.localFile
-        ? await AudioTrack.fromFilePathWithMetadata(trackSource)
-        : AudioTrack.fromUrl(trackSource);
-
-    _logger.i('Creating AudioTrack: ${track.title}');
-    
-    try {
-      _logger.d('Calling audioEngine.loadPreloaded...');
-      await _audioEngine.loadPreloaded(track);
-      _logger.i('AudioTrack loaded successfully');
-    } catch (e, stack) {
-      _logger.e('!!! FAILED TO LOAD TRACK !!!: $e');
-      _firebase?.recordError(e, stack, reason: 'loadPreloaded');
-      return;
-    }
-
-    // Seek if needed
-    if (event.seekPositionMs != null && event.seekPositionMs! > 0) {
-      _logger.d('Seeking to position: ${event.seekPositionMs}ms');
-      await _audioEngine.seek(Duration(milliseconds: event.seekPositionMs!));
-    }
-
-    // Play at scheduled time
-    // Convert host's startAtMs to local time using clock offset
-    int delayMs = 0;
-    if (event.startAtMs != null) {
-      // BUG-8 FIX: Do a quick sync exchange before computing delay
-      // to get the freshest clock offset (initial calibration may be stale)
-      if (_client != null && _client!.isConnected) {
-        try {
-          await _client!.synchronize();
-          _logger.d('Pre-play sync completed, offset: ${_client!.clockSync.stats.offsetMs}ms');
-        } catch (e) {
-          _logger.w('Pre-play sync failed, using existing offset: $e');
-        }
-      }
-
-      final clockOffsetMs = _client?.clockSync.stats.offsetMs ?? 0;
-      final localStartAtMs = event.startAtMs! - clockOffsetMs.round();
-      delayMs = localStartAtMs - DateTime.now().millisecondsSinceEpoch;
-      _logger.d('Clock offset: ${clockOffsetMs.toStringAsFixed(1)}ms, '
-          'host startAt: ${event.startAtMs}, local startAt: $localStartAtMs, delay: ${delayMs}ms');
-    }
-
-    if (delayMs > 0 && delayMs < AppConstants.lateCompensationThresholdMs) {
-      _logger.i('Waiting ${delayMs}ms before playing...');
-      await Future.delayed(Duration(milliseconds: delayMs));
-    } else if (delayMs < 0) {
-      // We're late - compensate by seeking forward
-      final lateMs = -delayMs;
-      _logger.w('Late by ${lateMs}ms, seeking forward to compensate');
-      if (lateMs < AppConstants.lateCompensationMaxCompensationMs) {
-        // Compensate by seeking forward, even for large offsets
-        final currentPosition = _audioEngine.position.inMilliseconds;
-        await _audioEngine.seek(Duration(milliseconds: currentPosition + lateMs));
-        _logger.i('Seeked to ${currentPosition + lateMs}ms to compensate for ${lateMs}ms delay');
-      } else {
-        _logger.e('Too late (${lateMs}ms > ${AppConstants.lateCompensationMaxCompensationMs}ms), playing from current position');
-      }
-    } else if (delayMs >= AppConstants.lateCompensationThresholdMs) {
-      // Very far in the future - shouldn't happen, but cap the wait
-      _logger.w('Delay too large (${delayMs}ms), capping to ${AppConstants.lateCompensationThresholdMs}ms');
-      await Future.delayed(const Duration(milliseconds: AppConstants.lateCompensationThresholdMs));
-    }
-
-    _logger.d('Calling audioEngine.play()...');
-    await _audioEngine.play();
-    _logger.i('=== PLAYBACK STARTED ON SLAVE ===');
+    await _playback.handlePlayCommand(event);
     _emitState(SessionManagerState.playing);
   }
 
-  Future<void> _handleFileTransferMessage(ClientEvent event) async {
-    if (event.protocolMessage == null) {
-      _logger.w('Received file transfer message with null protocolMessage');
-      return;
-    }
-    
-    _logger.i('=== PROCESSING FILE TRANSFER MESSAGE ===');
-    _logger.i('Message type: ${event.protocolMessage!.type}');
-    
-    final result = await _fileTransfer.handleIncomingMessage(event.protocolMessage!);
-    
-    if (result != null) {
-      // File transfer complete, result is the local file path
-      _cachedFilePath = result;
-      _logger.i('=== FILE TRANSFER COMPLETE ===');
-      _logger.i('File saved at: $result');
-      
-      // Send ACK to host
-      if (_client != null) {
-        final ack = ProtocolMessage.fileTransferAck();
-        _client!.sendMessage(ack);
-        _logger.d('Sent file transfer ACK to host');
-      }
-
-      // Auto-preload the track so it's ready when play command arrives
-      try {
-        final file = File(result);
-        if (await file.exists()) {
-          final track = await AudioTrack.fromFilePathWithMetadata(result);
-          await _audioEngine.preloadTrack(track);
-          _logger.i('Auto-preloaded track after file transfer: ${track.title}');
-        }
-      } catch (e) {
-        _logger.w('Auto-preload after transfer failed (non-critical): $e');
-      }
-    } else {
-      _logger.d('File transfer in progress or not complete yet');
-    }
-  }
-
-  Future<void> _handleFileTransferBinary(ClientEvent event) async {
-    if (event.binaryData == null) {
-      _logger.w('Received file transfer binary with null data');
-      return;
-    }
-
-    _logger.d('=== PROCESSING BINARY FILE TRANSFER CHUNK ===');
-
-    final result = await _fileTransfer.handleBinaryChunk(event.binaryData!);
-
-    if (result != null) {
-      // File transfer complete, result is the local file path
-      _cachedFilePath = result;
-      _logger.i('=== FILE TRANSFER COMPLETE (binary) ===');
-      _logger.i('File saved at: $result');
-
-      // Send ACK to host
-      if (_client != null) {
-        final ack = ProtocolMessage.fileTransferAck();
-        _client!.sendMessage(ack);
-        _logger.d('Sent file transfer ACK to host');
-      }
-
-      // Auto-preload the track so it's ready when play command arrives
-      try {
-        final file = File(result);
-        if (await file.exists()) {
-          final track = await AudioTrack.fromFilePathWithMetadata(result);
-          await _audioEngine.preloadTrack(track);
-          _logger.i('Auto-preloaded track after file transfer: ${track.title}');
-        }
-      } catch (e) {
-        _logger.w('Auto-preload after transfer failed (non-critical): $e');
-      }
-    }
-  }
-
   Future<void> _handlePauseCommand(ClientEvent event) async {
-    await _audioEngine.pause();
+    await _playback.handlePauseCommand(event);
     _emitState(SessionManagerState.paused);
   }
 
   Future<void> _handleSeekCommand(ClientEvent event) async {
-    if (event.positionMs != null) {
-      await _audioEngine.seek(Duration(milliseconds: event.positionMs!));
-    }
+    await _playback.handleSeekCommand(event);
   }
 
   void _handlePlaylistUpdateCommand(ClientEvent event) {
-    if (event.playlistTracks == null) return;
-    _logger.i('Received playlist update: ${event.playlistTracks!.length} tracks');
-    if (!_playlistUpdateController.isClosed) {
-      _playlistUpdateController.add(PlaylistUpdate(
-        tracks: event.playlistTracks!,
-        currentIndex: event.playlistCurrentIndex ?? 0,
-      ));
-    }
+    _playback.handlePlaylistUpdateCommand(event, _playlistUpdateController);
   }
 
   void _emitState(SessionManagerState state) {
@@ -1243,9 +819,19 @@ class SessionManager {
   }
 
   /// Emit connected devices list for host dashboard.
+  /// HIGH-012 fix: Only emit if the list actually changed (change detection).
+  List<ConnectedDeviceInfo>? _lastEmittedDevices;
   void _emitConnectedDevices() {
     if (_role != DeviceRole.host || _server == null) return;
     final devices = getConnectedDevices();
+    // Only emit if the list changed (different length or different device IDs)
+    if (_lastEmittedDevices != null &&
+        devices.length == _lastEmittedDevices!.length) {
+      final same = devices.every((d) =>
+          _lastEmittedDevices!.any((old) => old.deviceId == d.deviceId));
+      if (same) return; // No change, skip emission
+    }
+    _lastEmittedDevices = List.from(devices);
     _connectedDevicesController.add(devices);
   }
 
@@ -1266,6 +852,16 @@ class SessionManager {
   void _onGuestJoinedNotification() {
     unawaited(HapticFeedback.lightImpact());
   }
+
+  // ── Delegated playback handlers (CRIT-005 fix) ──
+
+  Future<void> _handleFileTransferMessage(ClientEvent event) async {
+    await _playback.handleFileTransferMessage(event);
+  }
+
+  Future<void> _handleFileTransferBinary(ClientEvent event) async {
+    await _playback.handleFileTransferBinary(event);
+  }
 }
 
 /// States of the session manager.
@@ -1279,16 +875,7 @@ enum SessionManagerState {
   error,
 }
 
-/// Playlist update received from the host.
-class PlaylistUpdate {
-  final List<Map<String, dynamic>> tracks;
-  final int currentIndex;
-
-  const PlaylistUpdate({
-    required this.tracks,
-    required this.currentIndex,
-  });
-}
+// PlaylistUpdate is defined in playback_coordinator.dart (CRIT-005 fix)
 
 /// Sync quality update for the guest UI.
 class SyncQualityUpdate {

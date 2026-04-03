@@ -80,7 +80,7 @@ void main() {
 
   group('PlayerBloc', () {
     test('initial state is correct', () {
-      final bloc = PlayerBloc(sessionManager: sessionManager);
+      final bloc = PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine);
       expect(bloc.state.status, PlayerStatus.idle);
       expect(bloc.state.currentTrack, isNull);
       expect(bloc.state.playlist.isEmpty, true);
@@ -93,7 +93,7 @@ void main() {
       'LoadTrackRequested loads track and creates playlist',
       build: () {
         when(() => audioEngine.loadTrack(any())).thenAnswer((_) async {});
-        return PlayerBloc(sessionManager: sessionManager);
+        return PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine);
       },
       act: (bloc) => bloc.add(LoadTrackRequested(
         AudioTrack.fromFilePath('/test/song.mp3'),
@@ -114,7 +114,7 @@ void main() {
 
     blocTest<PlayerBloc, PlayerState>(
       'AddToQueueRequested loads track when playlist is empty',
-      build: () => PlayerBloc(sessionManager: sessionManager),
+      build: () => PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine),
       act: (bloc) {
         bloc.add(AddToQueueRequested(AudioTrack.fromFilePath('/test/song1.mp3')));
       },
@@ -129,7 +129,7 @@ void main() {
 
     blocTest<PlayerBloc, PlayerState>(
       'AddToQueueRequested adds track to playlist when playlist is not empty',
-      build: () => PlayerBloc(sessionManager: sessionManager),
+      build: () => PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine),
       seed: () => PlayerState(
         status: PlayerStatus.paused,
         currentTrack: AudioTrack.fromFilePath('/test/existing.mp3'),
@@ -154,7 +154,7 @@ void main() {
       build: () {
         when(() => sessionManager.pausePlayback()).thenAnswer((_) async {});
         when(() => audioEngine.stop()).thenAnswer((_) async {});
-        return PlayerBloc(sessionManager: sessionManager);
+        return PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine);
       },
       seed: () => PlayerState(
         status: PlayerStatus.paused,
@@ -180,7 +180,7 @@ void main() {
       build: () {
         when(() => sessionManager.pausePlayback()).thenAnswer((_) async {});
         when(() => audioEngine.stop()).thenAnswer((_) async {});
-        return PlayerBloc(sessionManager: sessionManager);
+        return PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine);
       },
       seed: () => PlayerState(
         status: PlayerStatus.paused,
@@ -207,7 +207,7 @@ void main() {
         when(() => audioEngine.currentTrack).thenReturn(
           AudioTrack.fromFilePath('/test/song.mp3'),
         );
-        return PlayerBloc(sessionManager: sessionManager);
+        return PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine);
       },
       seed: () => PlayerState(
         status: PlayerStatus.paused,
@@ -228,7 +228,7 @@ void main() {
 
     blocTest<PlayerBloc, PlayerState>(
       'PlayRequested emits error when no track selected',
-      build: () => PlayerBloc(sessionManager: sessionManager),
+      build: () => PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine),
       act: (bloc) => bloc.add(const PlayRequested()),
       expect: () => [
         isA<PlayerState>()
@@ -240,7 +240,7 @@ void main() {
       'PauseRequested pauses playback (solo mode)',
       build: () {
         when(() => audioEngine.pause()).thenAnswer((_) async {});
-        return PlayerBloc(sessionManager: sessionManager);
+        return PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine);
       },
       seed: () => PlayerState(
         status: PlayerStatus.playing,
@@ -260,7 +260,7 @@ void main() {
       'StopRequested stops playback and resets position',
       build: () {
         when(() => audioEngine.stop()).thenAnswer((_) async {});
-        return PlayerBloc(sessionManager: sessionManager);
+        return PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine);
       },
       seed: () => PlayerState(
         status: PlayerStatus.playing,
@@ -282,7 +282,7 @@ void main() {
       'VolumeChanged updates volume',
       build: () {
         when(() => audioEngine.setVolume(any())).thenAnswer((_) async {});
-        return PlayerBloc(sessionManager: sessionManager);
+        return PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine);
       },
       act: (bloc) => bloc.add(const VolumeChanged(0.5)),
       expect: () => [
@@ -298,7 +298,7 @@ void main() {
       'SeekRequested seeks to position',
       build: () {
         when(() => audioEngine.seek(any())).thenAnswer((_) async {});
-        return PlayerBloc(sessionManager: sessionManager);
+        return PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine);
       },
       act: (bloc) => bloc.add(const SeekRequested(Duration(seconds: 60))),
       expect: () => [
@@ -318,7 +318,7 @@ void main() {
         when(() => sessionManager.role).thenReturn(DeviceRole.host);
         when(() => sessionManager.playTrack(any(), delayMs: any(named: 'delayMs'), playlist: any(named: 'playlist')))
             .thenAnswer((_) async {});
-        return PlayerBloc(sessionManager: sessionManager);
+        return PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine);
       },
       seed: () => PlayerState(
         status: PlayerStatus.playing,
@@ -344,7 +344,7 @@ void main() {
 
     blocTest<PlayerBloc, PlayerState>(
       'SkipNextRequested does nothing at end of queue',
-      build: () => PlayerBloc(sessionManager: sessionManager),
+      build: () => PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine),
       seed: () => PlayerState(
         status: PlayerStatus.playing,
         currentTrack: AudioTrack.fromFilePath('/test/song2.mp3'),
@@ -364,7 +364,7 @@ void main() {
       'SkipPreviousRequested restarts track if > 3s in',
       build: () {
         when(() => audioEngine.seek(any())).thenAnswer((_) async {});
-        return PlayerBloc(sessionManager: sessionManager);
+        return PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine);
       },
       seed: () => PlayerState(
         status: PlayerStatus.playing,
@@ -387,7 +387,7 @@ void main() {
 
     blocTest<PlayerBloc, PlayerState>(
       'PositionUpdated updates position',
-      build: () => PlayerBloc(sessionManager: sessionManager),
+      build: () => PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine),
       act: (bloc) => bloc.add(const PositionUpdated(Duration(seconds: 45))),
       expect: () => [
         isA<PlayerState>()
@@ -397,7 +397,7 @@ void main() {
 
     blocTest<PlayerBloc, PlayerState>(
       'AudioStateChanged playing updates status',
-      build: () => PlayerBloc(sessionManager: sessionManager),
+      build: () => PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine),
       act: (bloc) => bloc.add(const AudioStateChanged(AudioEngineState.playing)),
       expect: () => [
         isA<PlayerState>()
@@ -407,7 +407,7 @@ void main() {
 
     blocTest<PlayerBloc, PlayerState>(
       'AudioStateChanged idle while playing triggers TrackCompleted',
-      build: () => PlayerBloc(sessionManager: sessionManager),
+      build: () => PlayerBloc(sessionManager: sessionManager, audioEngine: audioEngine),
       seed: () => PlayerState(
         status: PlayerStatus.playing,
         currentTrack: AudioTrack.fromFilePath('/test/song1.mp3'),

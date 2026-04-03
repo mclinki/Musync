@@ -1,19 +1,14 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/services.dart';
 import 'package:logger/logger.dart';
 import '../app_constants.dart';
 
 /// Serves the APK file over HTTP on the local network.
 ///
-/// This allows devices WITHOUT Musync to download and install the app
-/// by opening a URL in their browser.
-///
-/// Flow:
-/// 1. [start] — copies APK to a temp location, starts HTTP server
-/// 2. [shareUrl] — the URL to share (e.g., http://192.168.1.5:8080/apk)
-/// 3. Target device opens URL in browser → downloads APK → installs
-/// 4. [stop] — stops server, cleans up temp file
+/// CRIT-003 fix: Binds to specific local IP (not anyIPv4) and requires
+/// a random access token in the URL to prevent unauthorized downloads.
 class ApkShareService {
   static const int _defaultPort = 8080;
   static const String _channelName = AppConstants.foregroundServiceChannel;
@@ -22,6 +17,8 @@ class ApkShareService {
   HttpServer? _server;
   String? _apkTempPath;
   int _port = _defaultPort;
+  /// Random access token for APK download (CRIT-003 fix).
+  String? _accessToken;
 
   ApkShareService({Logger? logger}) : _logger = logger ?? Logger();
 
@@ -33,16 +30,17 @@ class ApkShareService {
 
   /// The URL to share with other devices.
   /// Returns null if server is not running.
+  /// CRIT-003 fix: URL includes access token.
   String? shareUrl(String localIp) {
-    if (_server == null) return null;
-    return 'http://$localIp:$_port/apk';
+    if (_server == null || _accessToken == null) return null;
+    return 'http://$localIp:$_port/apk?token=$_accessToken';
   }
 
   /// Start the HTTP server and serve the APK.
   ///
+  /// CRIT-003 fix: [localIp] is now required to bind to specific interface.
   /// Returns the server port on success, or null on failure.
-  /// Use [shareUrl] with the local IP to get the full URL.
-  Future<int?> start({int port = _defaultPort}) async {
+  Future<int?> start({int port = _defaultPort, required String localIp}) async {
     if (_server != null) {
       _logger.w('APK share server already running on port $_port');
       return _port;
@@ -57,19 +55,22 @@ class ApkShareService {
       }
 
       // 2. Copy APK to a readable temp location
-      //    (on Android, the install dir may not be readable by the HTTP server)
       _apkTempPath = await _copyApkToTemp(apkPath);
       if (_apkTempPath == null) {
         _logger.e('Cannot start APK share: failed to copy APK to temp');
         return null;
       }
 
-      // 3. Start HTTP server
-      _port = port;
-      _server = await HttpServer.bind(InternetAddress.anyIPv4, _port);
-      _logger.i('APK share server started on port $_port');
+      // 3. Generate random access token (CRIT-003 fix)
+      _accessToken = _generateToken();
+      _logger.i('APK share access token generated');
 
-      // 4. Listen for requests
+      // 4. Start HTTP server — bind to specific local IP only (CRIT-003 fix)
+      _port = port;
+      _server = await HttpServer.bind(InternetAddress(localIp), _port);
+      _logger.i('APK share server started on $localIp:$_port');
+
+      // 5. Listen for requests
       _server!.listen((HttpRequest request) async {
         await _handleRequest(request);
       });
@@ -86,6 +87,7 @@ class ApkShareService {
   Future<void> stop() async {
     await _server?.close(force: true);
     _server = null;
+    _accessToken = null;
 
     // Clean up temp APK file
     if (_apkTempPath != null) {
@@ -110,6 +112,15 @@ class ApkShareService {
     _logger.d('APK share request: ${request.method} $path from ${request.connectionInfo?.remoteAddress}');
 
     if (path == '/apk' || path == '/apk/') {
+      // CRIT-003 fix: Verify access token
+      final token = request.uri.queryParameters['token'];
+      if (token == null || token != _accessToken) {
+        request.response
+          ..statusCode = HttpStatus.forbidden
+          ..write('Access denied. Invalid or missing token.')
+          ..close();
+        return;
+      }
       await _serveApk(request);
     } else if (path == '/' || path == '') {
       await _serveLandingPage(request);
@@ -235,5 +246,12 @@ class ApkShareService {
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
     return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  /// Generate a random access token for APK downloads (CRIT-003 fix).
+  String _generateToken() {
+    final random = Random.secure();
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    return List.generate(32, (_) => chars[random.nextInt(chars.length)]).join();
   }
 }

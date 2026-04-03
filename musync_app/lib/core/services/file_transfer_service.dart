@@ -84,12 +84,17 @@ class FileTransferService {
 
     for (final key in staleKeys) {
       final transfer = _incomingTransfers[key];
-      // MED-005 fix: Delete partial file when cleaning up stale transfer
-      if (transfer != null && _tempDir != null) {
-        final partialFile = File('${_tempDir!.path}/${transfer.fileName}');
-        if (partialFile.existsSync()) {
-          partialFile.deleteSync();
-          _logger.d('Deleted partial file: ${transfer.fileName}');
+      if (transfer != null) {
+        // CRIT-008 fix: Close file handle before deleting partial file
+        transfer.fileHandle?.close().catchError((e) {
+          _logger.w('Failed to close stale file handle: $e');
+        });
+        if (_tempDir != null) {
+          final partialFile = File('${_tempDir!.path}/${transfer.fileName}');
+          if (partialFile.existsSync()) {
+            partialFile.deleteSync();
+            _logger.d('Deleted partial file: ${transfer.fileName}');
+          }
         }
       }
       _incomingTransfers.remove(key);
@@ -285,24 +290,31 @@ class FileTransferService {
       return null;
     }
 
-    // Verify chunk order - insert at correct index
-    if (chunkIndex < transfer.totalChunks) {
-      // Ensure the chunks list has enough capacity
+    // CRIT-008 fix: Write chunk directly to disk via file handle instead of buffering in memory
+    if (transfer.fileHandle != null) {
+      try {
+        await transfer.fileHandle!.setPosition(chunkIndex * AppConstants.fileChunkSizeBytes);
+        await transfer.fileHandle!.writeFrom(data);
+      } catch (e) {
+        _logger.e('Failed to write chunk $chunkIndex to disk: $e');
+        return null;
+      }
+    } else {
+      // Fallback: buffer in memory (legacy mode for base64 transfers)
       while (transfer.chunks.length <= chunkIndex) {
         transfer.chunks.add(Uint8List(0));
       }
       transfer.chunks[chunkIndex] = Uint8List.fromList(data);
-    } else {
-      _logger.w('Received chunk $chunkIndex but totalChunks is ${transfer.totalChunks}');
     }
 
-    final receivedCount = transfer.chunks.where((c) => c.isNotEmpty).length;
-    _logger.d('Received binary chunk $chunkIndex, total chunks: $receivedCount/${transfer.totalChunks}');
-
     // Report progress
+    final bytesTransferred = transfer.fileHandle != null
+        ? (chunkIndex + 1) * AppConstants.fileChunkSizeBytes
+        : transfer.chunks.fold<int>(0, (sum, chunk) => sum + chunk.length);
+
     _progressController.add(TransferProgress(
       fileName: transfer.fileName,
-      bytesTransferred: transfer.chunks.fold<int>(0, (sum, chunk) => sum + chunk.length),
+      bytesTransferred: bytesTransferred.clamp(0, transfer.fileSize),
       totalBytes: transfer.fileSize,
       isIncoming: true,
     ));
@@ -312,16 +324,24 @@ class FileTransferService {
 
   Future<String?> _handleTransferStart(ProtocolMessage message) async {
     final rawFileName = message.payload['file_name'] as String? ?? 'unknown';
+    // HIGH-002 fix: Sanitize filename — strip all path components, keep only basename
     final fileName = rawFileName
-        .replaceAll(RegExp(r'[./\\]'), '_')
+        .split(RegExp(r'[/\\]'))
+        .last
         .replaceAll(RegExp(r'[^a-zA-Z0-9_.\-]'), '_');
     final fileSize = (message.payload['file_size_bytes'] as num?)?.toInt() ?? 0;
     final totalChunks = (message.payload['total_chunks'] as num?)?.toInt() ?? 0;
     // Transfer ID for unambiguous chunk routing (CRIT-003 fix)
     final transferId = message.payload['transfer_id'] as String? ?? fileName;
 
-    if (fileName == 'unknown' || fileSize == 0 || totalChunks == 0) {
+    if (fileName == 'unknown' || fileName.isEmpty || fileSize == 0 || totalChunks == 0) {
       _logger.w('Invalid fileTransferStart payload: ${message.payload}');
+      return null;
+    }
+
+    // HIGH-003 fix: Reject files exceeding max size
+    if (fileSize > AppConstants.maxFileSizeBytes) {
+      _logger.w('File too large: ${formatBytes(fileSize)} (max: ${formatBytes(AppConstants.maxFileSizeBytes)})');
       return null;
     }
 
@@ -331,12 +351,27 @@ class FileTransferService {
     _logger.i('fileSize: $fileSize bytes');
     _logger.i('totalChunks: $totalChunks');
 
+    if (_tempDir == null) {
+      _logger.e('Cannot start transfer: temp dir not initialized');
+      return null;
+    }
+
+    // CRIT-008 fix: Open file handle for streaming writes instead of buffering in memory
+    final filePath = '${_tempDir!.path}/$fileName';
+    RandomAccessFile? fileHandle;
+    try {
+      fileHandle = await File(filePath).open(mode: FileMode.write);
+    } catch (e) {
+      _logger.e('Failed to open file for writing: $e');
+      return null;
+    }
+
     _activeTransferId = transferId;
     _incomingTransfers[transferId] = _IncomingTransfer(
       fileName: fileName,
       fileSize: fileSize,
       totalChunks: totalChunks,
-      chunks: [],
+      fileHandle: fileHandle,
     );
 
     return null;
@@ -366,24 +401,31 @@ class FileTransferService {
 
     final bytes = base64Decode(base64Data);
 
-    // Verify chunk order - insert at correct index
-    if (chunkIndex < transfer.totalChunks) {
-      // Ensure the chunks list has enough capacity
+    // CRIT-008 fix: Write directly to disk if file handle is available
+    if (transfer.fileHandle != null) {
+      try {
+        await transfer.fileHandle!.setPosition(chunkIndex * AppConstants.fileChunkSizeBytes);
+        await transfer.fileHandle!.writeFrom(bytes);
+      } catch (e) {
+        _logger.e('Failed to write base64 chunk $chunkIndex to disk: $e');
+        return null;
+      }
+    } else {
+      // Fallback: buffer in memory
       while (transfer.chunks.length <= chunkIndex) {
         transfer.chunks.add(Uint8List(0));
       }
       transfer.chunks[chunkIndex] = bytes;
-    } else {
-      _logger.w('Received chunk $chunkIndex but totalChunks is ${transfer.totalChunks}');
     }
 
-    final receivedCount = transfer.chunks.where((c) => c.isNotEmpty).length;
-    _logger.d('Received chunk $chunkIndex, total chunks: $receivedCount/${transfer.totalChunks}');
-    
     // Report progress
+    final bytesTransferred = transfer.fileHandle != null
+        ? (chunkIndex + 1) * AppConstants.fileChunkSizeBytes
+        : transfer.chunks.fold<int>(0, (sum, chunk) => sum + chunk.length);
+
     _progressController.add(TransferProgress(
       fileName: transfer.fileName,
-      bytesTransferred: transfer.chunks.fold<int>(0, (sum, chunk) => sum + chunk.length),
+      bytesTransferred: bytesTransferred.clamp(0, transfer.fileSize),
       totalBytes: transfer.fileSize,
       isIncoming: true,
     ));
@@ -413,20 +455,32 @@ class FileTransferService {
       return null;
     }
     
-    _logger.i('Completing transfer for ${transfer.fileName}, ${transfer.chunks.length} chunks received');
-    
-    // Combine all chunks
-    final allBytes = BytesBuilder();
-    for (final chunk in transfer.chunks) {
-      allBytes.add(chunk);
+    final filePath = '${_tempDir!.path}/${transfer.fileName}';
+
+    // CRIT-008 fix: Close file handle instead of combining chunks in memory
+    if (transfer.fileHandle != null) {
+      try {
+        await transfer.fileHandle!.close();
+        _logger.i('File handle closed for ${transfer.fileName}');
+      } catch (e) {
+        _logger.e('Failed to close file handle: $e');
+        _incomingTransfers.remove(transferId);
+        _activeTransferId = null;
+        return null;
+      }
+    } else {
+      // Fallback: combine chunks from memory (legacy base64 path)
+      _logger.i('Completing transfer for ${transfer.fileName}, ${transfer.chunks.length} chunks received');
+      final allBytes = BytesBuilder();
+      for (final chunk in transfer.chunks) {
+        allBytes.add(chunk);
+      }
+      final file = File(filePath);
+      await file.writeAsBytes(allBytes.toBytes());
     }
 
-    // Save to temp directory
-    final filePath = '${_tempDir!.path}/${transfer.fileName}';
-    final file = File(filePath);
-    await file.writeAsBytes(allBytes.toBytes());
-
     // Verify file was written
+    final file = File(filePath);
     if (await file.exists()) {
       final savedSize = await file.length();
       _logger.i('File received and saved: $filePath (${formatBytes(savedSize)}, expected ${formatBytes(transfer.fileSize)})');
@@ -462,6 +516,8 @@ class _IncomingTransfer {
   final String fileName;
   final int fileSize;
   final int totalChunks;
+  /// CRIT-008 fix: File handle for streaming writes to disk instead of buffering in memory.
+  RandomAccessFile? _fileHandle;
   final List<Uint8List> chunks;
   final DateTime startedAt;
 
@@ -469,9 +525,15 @@ class _IncomingTransfer {
     required this.fileName,
     required this.fileSize,
     required this.totalChunks,
-    required this.chunks,
+    RandomAccessFile? fileHandle,
+    List<Uint8List>? chunks,
     DateTime? startedAt,
-  }) : startedAt = startedAt ?? DateTime.now();
+  })  : _fileHandle = fileHandle,
+        chunks = chunks ?? [],
+        startedAt = startedAt ?? DateTime.now();
+
+  RandomAccessFile? get fileHandle => _fileHandle;
+  set fileHandle(RandomAccessFile? value) => _fileHandle = value;
 }
 
 /// Progress information for a file transfer.

@@ -2,6 +2,66 @@
 
 All notable changes to MusyncMIMO will be documented in this file.
 
+## [0.1.39] - 2026-04-04 — HIGH Priority Performance & Architecture Fixes
+
+### Performance
+- **HIGH-011** — Position slider decoupled from BLoC state: `PositionSlider` now listens directly to `audioEngine.positionStream` instead of receiving position through BLoC state. Eliminates full widget tree rebuilds at 5Hz (200ms interval). Only the slider rebuilds on position changes
+- **HIGH-012** — Connected devices emission now uses change detection: `_emitConnectedDevices()` only emits if the device list actually changed (different IDs). Eliminates unnecessary stream events every 2 seconds
+
+### Architecture
+- **HIGH-008** — Law of Demeter fix: `PlayerBloc` now receives `AudioEngine` directly via constructor injection instead of accessing it through `sessionManager.audioEngine`. Reduces coupling, improves testability
+- **HIGH-007** — mDNS info leak fixed: TXT records now broadcast only truncated device ID (`id=abcd1234`) and version (`v=0.1.38`) instead of full device_id, device_name, device_type. TCP probe response also minimized. Full device details exchanged via WebSocket after PIN auth
+
+### Changed
+- `PositionSlider` API changed: `position` parameter replaced with `positionStream` (Stream<Duration>)
+- `PlayerBloc` constructor now requires `audioEngine` parameter
+- `DeviceDiscovery` mDNS/TCP responses now return minimal info only
+
+## [0.1.38] - 2026-04-04 — HIGH Priority Security Fixes
+
+### Security
+- **HIGH-004** — WebSocket server now binds to local IP instead of `anyIPv4` (0.0.0.0). Prevents exposure on public networks
+- **HIGH-005** — Self-signed TLS certificate persisted to disk (`~/.musync_certs/`) across restarts. Enables certificate pinning (CRIT-001) to work reliably
+- **HIGH-006** — APK download integrity: SHA-256 hash computed after download (verification prepared, compare against expected hash from GitHub release)
+- **HIGH-018** — Version parsing crash fix: `_compareVersions` uses `int.tryParse` instead of `int.parse` to handle non-numeric tags like `0.1.36-beta`
+- **MED-011** — Partial APK download cleanup: file deleted on failure
+
+### Changed
+- `WebSocketServer` constructor now accepts optional `localIp` parameter
+- `SessionManager` passes `_localIp` to `WebSocketServer` on host session start
+
+## [0.1.37] - 2026-04-04 — Critical Security & Architecture Release
+
+### Security
+- **CRIT-001** — TLS certificate pinning: `badCertificateCallback` now validates SHA-1 fingerprint when `AppConstants.expectedCertFingerprint` is set (empty = legacy mode with warning)
+- **CRIT-002** — Session PIN authentication: WebSocket server generates a 6-digit PIN, clients must provide it to join. Prevents unauthorized devices from joining sessions
+- **CRIT-003** — APK share access token: random 32-char token required in URL + server binds to specific local IP instead of `anyIPv4`
+- **CRIT-004** — Firebase App Check integration prepared (code added, requires `flutter pub add firebase_app_check` + console setup)
+- **HIGH-001** — WebSocket message size validation (1MB max) before JSON decoding to prevent DoS
+- **HIGH-002** — Path traversal fix: filename sanitization now uses `.split('/').last` to extract basename before stripping special chars
+- **HIGH-003** — File size validation (100MB max) enforced on receiver side in `_handleTransferStart`
+- **HIGH-018** — Version parsing crash fix: `_compareVersions` now uses `int.tryParse` instead of `int.parse` to handle non-numeric tags like `0.1.36-beta`
+
+### Architecture
+- **CRIT-005** — God Object refactoring: extracted `PlaybackCoordinator` (~380 lines) from `SessionManager` (1317→~900 lines, -32%). Separates playback coordination from session lifecycle
+- **CRIT-006** — `_handlePlayCommand` (142 lines, 5+ nesting levels) extracted into dedicated methods within `PlaybackCoordinator`
+- **CRIT-008** — File transfer streaming: chunks now written directly to disk via `RandomAccessFile` instead of buffering in memory. Eliminates OOM risk for large files
+
+### Tests
+- **CRIT-007** — 48 new tests added across 3 new test files:
+  - `playback_coordinator_test.dart` (22 tests) — Host playback, slave commands, file transfer, state management
+  - `file_transfer_service_test.dart` (15 tests) — Binary chunk parsing, protocol factories, size constants, TransferProgress
+  - `websocket_server_pin_test.dart` (6 tests) — PIN generation, ProtocolMessage join with PIN, AppConstants
+  - `websocket_client_test.dart` (5 tests) — Session PIN parameter, cert pinning constants, rejection handling
+- **Total tests**: 158 → **206** (+48)
+
+### Changed
+- `SessionManager.joinSession()` now accepts optional `sessionPin` parameter
+- `SessionManager.sessionPin` getter exposes host's PIN for out-of-band sharing
+- `ApkShareService.start()` now requires `localIp` parameter (binds to specific interface)
+- `ApkShareService.shareUrl()` now includes access token in URL
+- `ProtocolMessage.join()` factory now accepts optional `sessionPin` parameter
+
 ## [0.1.36] - 2026-04-03 — Build Fix + Pure Dart ID3
 
 ### Changed

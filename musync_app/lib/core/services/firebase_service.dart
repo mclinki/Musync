@@ -9,6 +9,9 @@ import 'package:logger/logger.dart';
 import '../app_constants.dart';
 import '../../firebase_options.dart';
 
+// CRIT-004: Firebase App Check import (requires `flutter pub add firebase_app_check`)
+// import 'package:firebase_app_check/firebase_app_check.dart';
+
 /// Centralized Firebase service for MusyncMIMO.
 ///
 /// Manages:
@@ -90,6 +93,19 @@ class FirebaseService {
       };
 
       _logger.i('Crashlytics initialized');
+
+      // 2b. Firebase App Check (CRIT-004 fix)
+      // Requires: flutter pub add firebase_app_check
+      // And Firebase Console setup: enable App Check with Play Integrity (Android)
+      // Uncomment below after adding the dependency:
+      // try {
+      //   await FirebaseAppCheck.instance.activate(
+      //     androidProvider: AndroidProvider.playIntegrity,
+      //   );
+      //   _logger.i('Firebase App Check activated');
+      // } catch (e) {
+      //   _logger.w('Firebase App Check activation failed (app continues without it): $e');
+      // }
 
       // 3. Analytics
       _analytics = FirebaseAnalytics.instance;

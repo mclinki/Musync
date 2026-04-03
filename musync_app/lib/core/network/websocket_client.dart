@@ -17,6 +17,8 @@ class WebSocketClient {
   final String hostIp;
   final int hostPort;
   final Logger _logger;
+  /// Session PIN for join authentication (CRIT-002 fix).
+  final String? sessionPin;
 
   WebSocket? _socket;
   final StreamController<ClientEvent> _eventController =
@@ -46,6 +48,7 @@ class WebSocketClient {
   WebSocketClient({
     required this.hostIp,
     required this.hostPort,
+    this.sessionPin,
     Logger? logger,
   })  : _logger = logger ?? Logger(),
         clockSync = ClockSyncEngine();
@@ -193,8 +196,8 @@ class WebSocketClient {
         onError: _handleError,
       );
 
-      // Send join message
-      final joinMsg = ProtocolMessage.join(device: _localDevice!);
+      // Send join message with session PIN (CRIT-002 fix)
+      final joinMsg = ProtocolMessage.join(device: _localDevice!, sessionPin: sessionPin);
       _socket!.add(joinMsg.encode());
 
       _eventController.add(const ClientEvent(type: ClientEventType.connected));
@@ -212,10 +215,32 @@ class WebSocketClient {
     }
   }
 
-  /// Connect via WSS, accepting self-signed certificates.
+  /// Connect via WSS, validating the server certificate.
+  ///
+  /// If [AppConstants.expectedCertFingerprint] is set, the certificate SHA-1
+  /// is pinned. Otherwise, a warning is logged and any certificate is accepted
+  /// (legacy mode — NOT recommended for production).
   Future<WebSocket> _connectWss(String uri) async {
+    final expectedFingerprint = AppConstants.expectedCertFingerprint.trim();
+
     final httpClient = HttpClient()
-      ..badCertificateCallback = (cert, host, port) => true;
+      ..badCertificateCallback = (cert, host, port) {
+        // CRIT-001 fix: Certificate pinning
+        if (expectedFingerprint.isNotEmpty) {
+          final actualFingerprint = cert.sha1
+              .map((b) => b.toRadixString(16).padLeft(2, '0'))
+              .join(':')
+              .toUpperCase();
+          final match = actualFingerprint == expectedFingerprint.toUpperCase();
+          if (!match) {
+            _logger.e('Certificate pinning failed! Expected: $expectedFingerprint, Got: $actualFingerprint');
+          }
+          return match;
+        }
+        // Legacy fallback — warn but accept (should NOT be used in production)
+        _logger.w('⚠️ No cert fingerprint configured — accepting any certificate (CRIT-001)');
+        return true;
+      };
 
     try {
       // HttpClient.getUrl does not support 'wss://' — convert to 'https://'

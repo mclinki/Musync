@@ -370,17 +370,7 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     emit(state.copyWith(isApkShareRunning: true, clearShareUrl: true));
 
     try {
-      // 1. Start the HTTP server
-      final port = await _apkShare.start(port: state.apkSharePort);
-      if (port == null) {
-        emit(state.copyWith(
-          isApkShareRunning: false,
-          errorMessage: 'Impossible de démarrer le partage APK. Vérifiez que l\'APK est disponible.',
-        ));
-        return;
-      }
-
-      // 2. Resolve local IP (from session if available, otherwise discover it)
+      // 1. Resolve local IP first (needed for CRIT-003 fix: bind to specific interface)
       String? localIp = _sessionManager.localIp;
       if (localIp == null) {
         // Not in a session — resolve IP directly
@@ -419,12 +409,21 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
           isApkShareRunning: false,
           errorMessage: 'Impossible de résoudre l\'adresse IP. Vérifiez votre connexion Wi-Fi.',
         ));
-        await _apkShare.stop();
         return;
       }
 
-      // 3. Build the share URL
-      final shareUrl = 'http://$localIp:$port/apk';
+      // 2. Start the HTTP server bound to specific local IP (CRIT-003 fix)
+      final port = await _apkShare.start(port: state.apkSharePort, localIp: localIp);
+      if (port == null) {
+        emit(state.copyWith(
+          isApkShareRunning: false,
+          errorMessage: 'Impossible de démarrer le partage APK. Vérifiez que l\'APK est disponible.',
+        ));
+        return;
+      }
+
+      // 3. Build the share URL (CRIT-003 fix: use service's shareUrl which includes token)
+      final shareUrl = _apkShare.shareUrl(localIp) ?? 'http://$localIp:$port/apk';
 
       _logger.i('APK share started: $shareUrl');
       emit(state.copyWith(

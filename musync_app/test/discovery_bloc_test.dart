@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:bloc_test/bloc_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:musync_mimo/core/core.dart';
+import 'package:musync_mimo/core/session/playback_coordinator.dart' show PlaylistUpdate;
 import 'package:musync_mimo/features/discovery/bloc/discovery_bloc.dart';
 
 // ── Mocks ──

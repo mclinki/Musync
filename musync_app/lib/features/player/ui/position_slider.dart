@@ -1,14 +1,26 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../../../core/utils/format.dart';
 
+/// Position slider that listens directly to a position stream
+/// instead of going through BLoC state (HIGH-011 fix).
+///
+/// This avoids rebuilding the entire widget tree on every position tick (200ms).
+/// Only the slider rebuilds when position changes.
 class PositionSlider extends StatefulWidget {
-  final Duration position;
+  /// Stream of position updates from the audio engine.
+  final Stream<Duration> positionStream;
+
+  /// Static duration (only changes when track changes, not on every tick).
   final Duration? duration;
+
+  /// Called when the user releases the slider.
   final ValueChanged<Duration> onSeek;
 
   const PositionSlider({
     super.key,
-    required this.position,
+    required this.positionStream,
     this.duration,
     required this.onSeek,
   });
@@ -20,6 +32,37 @@ class PositionSlider extends StatefulWidget {
 class _PositionSliderState extends State<PositionSlider> {
   double? _dragValue;
   bool _isDragging = false;
+  Duration _position = Duration.zero;
+  StreamSubscription<Duration>? _positionSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _positionSub = widget.positionStream.listen((position) {
+      if (!_isDragging && mounted) {
+        setState(() => _position = position);
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(PositionSlider oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.positionStream != widget.positionStream) {
+      _positionSub?.cancel();
+      _positionSub = widget.positionStream.listen((position) {
+        if (!_isDragging && mounted) {
+          setState(() => _position = position);
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _positionSub?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -27,7 +70,7 @@ class _PositionSliderState extends State<PositionSlider> {
     final hasDuration = maxMs > 0;
     final currentMs = _isDragging
         ? _dragValue ?? 0.0
-        : widget.position.inMilliseconds.toDouble().clamp(0.0, hasDuration ? maxMs : 0.0);
+        : _position.inMilliseconds.toDouble().clamp(0.0, hasDuration ? maxMs : 0.0);
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -36,7 +79,6 @@ class _PositionSliderState extends State<PositionSlider> {
           data: SliderTheme.of(context).copyWith(
             trackHeight: 4,
             thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-            // MED-013 fix: visually disable slider when no track loaded
             inactiveTrackColor: hasDuration
                 ? null
                 : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.1),
@@ -71,7 +113,7 @@ class _PositionSliderState extends State<PositionSlider> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                formatDuration(widget.position),
+                formatDuration(_position),
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               Text(
