@@ -346,12 +346,14 @@ void main() {
         when(() => sessionManager.joinSession(
               hostIp: any(named: 'hostIp'),
               hostPort: any(named: 'hostPort'),
+              sessionPin: any(named: 'sessionPin'),
             )).thenAnswer((_) async => true);
         when(() => sessionManager.stopScanning()).thenAnswer((_) async {});
         return DiscoveryBloc(sessionManager: sessionManager);
       },
       act: (bloc) => bloc.add(JoinSessionRequested(
         makeDevice(id: 'host-1', name: 'Host', ip: '192.168.1.50'),
+        sessionPin: '123456',
       )),
       expect: () => [
         isA<DiscoveryState>()
@@ -379,11 +381,13 @@ void main() {
         when(() => sessionManager.joinSession(
               hostIp: any(named: 'hostIp'),
               hostPort: any(named: 'hostPort'),
+              sessionPin: any(named: 'sessionPin'),
             )).thenAnswer((_) async => false);
         return DiscoveryBloc(sessionManager: sessionManager);
       },
       act: (bloc) => bloc.add(JoinSessionRequested(
         makeDevice(id: 'host-1', name: 'Host', ip: '192.168.1.50'),
+        sessionPin: '123456',
       )),
       expect: () => [
         isA<DiscoveryState>()
@@ -404,11 +408,13 @@ void main() {
         when(() => sessionManager.joinSession(
               hostIp: any(named: 'hostIp'),
               hostPort: any(named: 'hostPort'),
+              sessionPin: any(named: 'sessionPin'),
             )).thenThrow(Exception('Timeout'));
         return DiscoveryBloc(sessionManager: sessionManager);
       },
       act: (bloc) => bloc.add(JoinSessionRequested(
         makeDevice(id: 'host-1', name: 'Host', ip: '192.168.1.50'),
+        sessionPin: '123456',
       )),
       expect: () => [
         isA<DiscoveryState>()

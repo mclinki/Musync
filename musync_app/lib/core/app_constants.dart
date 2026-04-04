@@ -6,13 +6,13 @@ class AppConstants {
   AppConstants._(); // Prevent instantiation
 
   // ── App Info ──────────────────────────────────────────
-  static const String appVersion = '0.1.39';
+  static const String appVersion = '0.1.46';
   static const String appName = 'MusyncMIMO';
 
   // ── Network ───────────────────────────────────────────
   static const int defaultWebSocketPort = 7890;
   static const String webSocketPath = '/musync';
-  static const bool useTls = true;
+  static bool useTls = false;
   /// Expected SHA-1 fingerprint of the host's self-signed certificate.
   /// Set this before connecting to enable certificate pinning (CRIT-001 fix).
   /// Format: colon-separated hex bytes, e.g. 'AB:CD:EF:...'

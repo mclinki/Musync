@@ -90,15 +90,86 @@ class _DiscoveryView extends StatelessWidget {
                 port: kDefaultPort,
                 discoveredAt: DateTime.now(),
               );
-              context.read<DiscoveryBloc>().add(
-                    JoinSessionRequested(device),
-                  );
+              _showPinDialog(context, device);
             },
             child: const Text('Connecter'),
           ),
         ],
       ),
     ).then((_) => safeDispose());
+  }
+
+  /// Show a dialog to enter the session PIN before joining.
+  void _showPinDialog(BuildContext context, DeviceInfo hostDevice) {
+    final pinController = TextEditingController();
+    var pinDisposed = false;
+    void safePinDispose() {
+      if (!pinDisposed) {
+        pinDisposed = true;
+        pinController.dispose();
+      }
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Code PIN du groupe'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Demandez le code PIN à l\'hôte (${hostDevice.name})',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: pinController,
+              decoration: const InputDecoration(
+                hintText: '123456',
+                labelText: 'Code PIN à 6 chiffres',
+                border: OutlineInputBorder(),
+                counterText: '',
+              ),
+              keyboardType: const TextInputType.numberWithOptions(decimal: false),
+              maxLength: 6,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 24,
+                letterSpacing: 8,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              safePinDispose();
+              if (!context.mounted) return;
+              // Join without PIN
+              context.read<DiscoveryBloc>().add(
+                    JoinSessionRequested(hostDevice),
+                  );
+            },
+            child: const Text('Passer'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final pin = pinController.text.trim();
+              Navigator.pop(dialogContext);
+              safePinDispose();
+              if (!context.mounted) return;
+              context.read<DiscoveryBloc>().add(
+                    JoinSessionRequested(hostDevice, sessionPin: pin),
+                  );
+            },
+            child: const Text('Rejoindre'),
+          ),
+        ],
+      ),
+    ).then((_) => safePinDispose());
   }
 
   @override
@@ -265,9 +336,7 @@ class _DiscoveryView extends StatelessWidget {
                     return _DeviceTile(
                       device: device,
                       onTap: () {
-                        context.read<DiscoveryBloc>().add(
-                              JoinSessionRequested(device),
-                            );
+                        _showPinDialog(context, device);
                       },
                     );
                   },
@@ -280,6 +349,7 @@ class _DiscoveryView extends StatelessWidget {
   Widget _buildHostingView(BuildContext context, DiscoveryState state) {
     final sessionManager = context.read<SessionManager>();
     final localIp = sessionManager.localIp ?? 'Inconnu';
+    final sessionPin = sessionManager.sessionPin ?? '------';
 
     return Center(
       child: Column(
@@ -301,6 +371,39 @@ class _DiscoveryView extends StatelessWidget {
             style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
+          ),
+          const SizedBox(height: 16),
+          // Show session PIN for guests to join
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primaryContainer,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  'Code PIN du groupe',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  sessionPin,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        fontFamily: 'monospace',
+                        letterSpacing: 8,
+                        color: Theme.of(context).colorScheme.onPrimaryContainer,
+                      ),
+                ),
+                Text(
+                  'Partagez ce code pour rejoindre le groupe',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onPrimaryContainer,
+                      ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 16),
           // Show local IP for manual connection

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../../core/core.dart';
 import '../../onboarding/ui/onboarding_screen.dart';
 import '../bloc/settings_bloc.dart';
@@ -15,8 +16,17 @@ class SettingsScreen extends StatelessWidget {
   }
 }
 
-class _SettingsView extends StatelessWidget {
+class _SettingsView extends StatefulWidget {
   const _SettingsView();
+
+  @override
+  State<_SettingsView> createState() => _SettingsViewState();
+}
+
+class _SettingsViewState extends State<_SettingsView> {
+  // CRASH-2 fix: Track whether we've already scheduled a SnackBar callback
+  // to prevent Duplicate GlobalKeys from multiple addPostFrameCallback calls
+  bool _snackBarScheduled = false;
 
   @override
   Widget build(BuildContext context) {
@@ -30,8 +40,10 @@ class _SettingsView extends StatelessWidget {
             return const Center(child: CircularProgressIndicator());
           }
 
-          if (state.errorMessage != null) {
+          if (state.errorMessage != null && !_snackBarScheduled) {
+            _snackBarScheduled = true;
             WidgetsBinding.instance.addPostFrameCallback((_) {
+              _snackBarScheduled = false;
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(content: Text(state.errorMessage!)),
@@ -122,10 +134,12 @@ class _SettingsView extends StatelessWidget {
               ListTile(
                 leading: const Icon(Icons.security),
                 title: const Text('Chiffrement WebSocket'),
-                subtitle: const Text('Désactivé (ws://)'),
+                subtitle: Text(state.useTls ? 'Activé (wss://)' : 'Désactivé (ws://)'),
                 trailing: Switch(
-                  value: false,
-                  onChanged: null, // Disabled for now
+                  value: state.useTls,
+                  onChanged: (value) {
+                    context.read<SettingsBloc>().add(TlsToggled(value));
+                  },
                 ),
               ),
 
@@ -291,6 +305,17 @@ class _SettingsView extends StatelessWidget {
                           },
                           icon: const Icon(Icons.copy, size: 18),
                           label: const Text('Copier le lien'),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton.icon(
+                          onPressed: () {
+                            Share.share(
+                              state.apkShareUrl!,
+                              subject: 'Télécharger MusyncMIMO v${AppConstants.appVersion}',
+                            );
+                          },
+                          icon: const Icon(Icons.send, size: 18),
+                          label: const Text('Partager'),
                         ),
                       ],
                     ),
@@ -487,62 +512,54 @@ class _SettingsView extends StatelessWidget {
   }
 
   void _showDeviceNameDialog(BuildContext context, String currentName) {
+    // CRASH-4A fix: Controller created OUTSIDE builder to avoid recreation on rebuild
+    final controller = TextEditingController(text: currentName);
+    var disposed = false;
+    void safeDispose() {
+      if (!disposed) {
+        disposed = true;
+        controller.dispose();
+      }
+    }
+
     showDialog(
       context: context,
       builder: (dialogContext) {
-        final controller = TextEditingController(text: currentName);
-        var disposed = false;
-        void safeDispose() {
-          if (!disposed) {
-            disposed = true;
-            controller.dispose();
-          }
-        }
-
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return PopScope(
-              onPopInvokedWithResult: (didPop, result) {
+        return AlertDialog(
+          title: const Text('Nom de l\'appareil'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(
+              hintText: 'Mon téléphone',
+              border: OutlineInputBorder(),
+            ),
+            maxLength: 30,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
                 safeDispose();
+                Navigator.pop(dialogContext);
               },
-              child: AlertDialog(
-                title: const Text('Nom de l\'appareil'),
-                content: TextField(
-                  controller: controller,
-                  decoration: const InputDecoration(
-                    hintText: 'Mon téléphone',
-                    border: OutlineInputBorder(),
-                  ),
-                  maxLength: 30,
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () {
-                      Navigator.pop(dialogContext);
-                      safeDispose();
-                    },
-                    child: const Text('Annuler'),
-                  ),
-                  FilledButton(
-                    onPressed: () {
-                      final name = controller.text.trim();
-                      if (name.isNotEmpty) {
-                        context
-                            .read<SettingsBloc>()
-                            .add(DeviceNameChanged(name));
-                      }
-                      Navigator.pop(dialogContext);
-                      safeDispose();
-                    },
-                    child: const Text('Enregistrer'),
-                  ),
-                ],
-              ),
-            );
-          },
+              child: const Text('Annuler'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final name = controller.text.trim();
+                if (name.isNotEmpty) {
+                  context
+                      .read<SettingsBloc>()
+                      .add(DeviceNameChanged(name));
+                }
+                safeDispose();
+                Navigator.pop(dialogContext);
+              },
+              child: const Text('Enregistrer'),
+            ),
+          ],
         );
       },
-    );
+    ).then((_) => safeDispose()); // CRASH-4A fix: Always dispose, even on barrier tap
   }
 
   void _confirmClearCache(BuildContext context) {

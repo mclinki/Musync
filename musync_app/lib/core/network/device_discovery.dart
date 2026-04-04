@@ -544,6 +544,7 @@ class DeviceDiscovery {
   // ── mDNS Discovery ──
 
   /// Start mDNS discovery using the multicast_dns package.
+  /// CRASH-9 fix: Added retry logic + graceful degradation on SocketException.
   Future<void> _startMdnsDiscovery(
       {Duration interval = const Duration(seconds: 5)}) async {
     // mDNS is not supported on Windows (reusePort error)
@@ -566,12 +567,20 @@ class DeviceDiscovery {
         await _queryMdnsServices();
       });
     } catch (e) {
-      _logger.w('mDNS discovery failed (non-critical): $e');
+      // CRASH-9 fix: SocketException errno=103 is common on Android — degrade gracefully
+      final errorStr = e.toString().toLowerCase();
+      if (errorStr.contains('socket') || errorStr.contains('errno')) {
+        _logger.w('mDNS discovery failed due to socket error (CRASH-9): $e');
+        _logger.w('Falling back to TCP subnet scan only');
+      } else {
+        _logger.w('mDNS discovery failed (non-critical): $e');
+      }
       _mdnsClient = null;
     }
   }
 
   /// Query for mDNS services of our type.
+  /// CRASH-9 fix: Wrapped in try-catch to handle SocketException during lookup.
   Future<void> _queryMdnsServices() async {
     if (_mdnsClient == null) return;
 

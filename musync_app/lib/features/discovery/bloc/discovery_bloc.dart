@@ -46,11 +46,12 @@ class HostSessionRequested extends DiscoveryEvent {
 
 class JoinSessionRequested extends DiscoveryEvent {
   final DeviceInfo hostDevice;
+  final String? sessionPin;
 
-  const JoinSessionRequested(this.hostDevice);
+  const JoinSessionRequested(this.hostDevice, {this.sessionPin});
 
   @override
-  List<Object?> get props => [hostDevice];
+  List<Object?> get props => [hostDevice, sessionPin];
 }
 
 class SessionCreated extends DiscoveryEvent {
@@ -495,6 +496,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
       final success = await sessionManager.joinSession(
         hostIp: event.hostDevice.ip,
         hostPort: event.hostDevice.port,
+        sessionPin: event.sessionPin,
       );
       if (success) {
         // Stop scanning to save bandwidth once connected
@@ -677,15 +679,17 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
   }
 
   @override
-  Future<void> close() {
+  Future<void> close() async {
     _isClosed = true;
-    _devicesSub?.cancel();
-    _stateSub?.cancel();
-    _audioStateSub?.cancel();
-    _positionSub?.cancel();
-    _playlistSub?.cancel();
-    _syncQualitySub?.cancel();
-    _fileTransferSub?.cancel();
+    // CRASH-3/10 fix: Cancel ALL subscriptions BEFORE calling super.close()
+    // This prevents stream callbacks from firing add() on a closed BLoC
+    await _devicesSub?.cancel();
+    await _stateSub?.cancel();
+    await _audioStateSub?.cancel();
+    await _positionSub?.cancel();
+    await _playlistSub?.cancel();
+    await _syncQualitySub?.cancel();
+    await _fileTransferSub?.cancel();
     return super.close();
   }
 }

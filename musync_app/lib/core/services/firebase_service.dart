@@ -59,83 +59,107 @@ class FirebaseService {
       return;
     }
 
-    try {
-      _logger.i('Initializing Firebase...');
+    // CRASH-5 fix: Wait for network to stabilize before Firebase init
+    // SocketException errno=103 often occurs when init happens too early
+    await Future.delayed(const Duration(milliseconds: 500));
 
-      // 1. Core — with timeout to avoid hanging on unstable networks
-      await Firebase.initializeApp(
-        options: DefaultFirebaseOptions.currentPlatform,
-      ).timeout(
-        const Duration(seconds: 15),
-        onTimeout: () {
-          _logger.w('Firebase Core init timed out');
-          throw TimeoutException('Firebase Core init timed out');
-        },
-      );
-      _logger.i('Firebase Core initialized');
+    // CRASH-5 fix: Retry with exponential backoff for network errors
+    const maxRetries = 2;
+    for (int attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        _logger.i('Initializing Firebase (attempt ${attempt + 1}/${maxRetries + 1})...');
 
-      // 2. Crashlytics
-      _crashlytics = FirebaseCrashlytics.instance;
+        // 1. Core — with timeout to avoid hanging on unstable networks
+        await Firebase.initializeApp(
+          options: DefaultFirebaseOptions.currentPlatform,
+        ).timeout(
+          const Duration(seconds: 15),
+          onTimeout: () {
+            _logger.w('Firebase Core init timed out');
+            throw TimeoutException('Firebase Core init timed out');
+          },
+        );
+        _logger.i('Firebase Core initialized');
 
-      // Pass all uncaught Flutter errors to Crashlytics (chain with previous handler)
-      final previousFlutterError = FlutterError.onError;
-      FlutterError.onError = (details) {
-        _crashlytics!.recordFlutterFatalError(details);
-        previousFlutterError?.call(details);
-      };
+        // 2. Crashlytics
+        _crashlytics = FirebaseCrashlytics.instance;
 
-      // Pass all uncaught async errors to Crashlytics (chain with previous handler)
-      final previousPlatformError = PlatformDispatcher.instance.onError;
-      PlatformDispatcher.instance.onError = (error, stack) {
-        _crashlytics!.recordError(error, stack, fatal: true);
-        previousPlatformError?.call(error, stack);
-        return true;
-      };
+        // Pass all uncaught Flutter errors to Crashlytics (chain with previous handler)
+        final previousFlutterError = FlutterError.onError;
+        FlutterError.onError = (details) {
+          _crashlytics!.recordFlutterFatalError(details);
+          previousFlutterError?.call(details);
+        };
 
-      _logger.i('Crashlytics initialized');
+        // Pass all uncaught async errors to Crashlytics (chain with previous handler)
+        final previousPlatformError = PlatformDispatcher.instance.onError;
+        PlatformDispatcher.instance.onError = (error, stack) {
+          _crashlytics!.recordError(error, stack, fatal: true);
+          previousPlatformError?.call(error, stack);
+          return true;
+        };
 
-      // 2b. Firebase App Check (CRIT-004 fix)
-      // Requires: flutter pub add firebase_app_check
-      // And Firebase Console setup: enable App Check with Play Integrity (Android)
-      // Uncomment below after adding the dependency:
-      // try {
-      //   await FirebaseAppCheck.instance.activate(
-      //     androidProvider: AndroidProvider.playIntegrity,
-      //   );
-      //   _logger.i('Firebase App Check activated');
-      // } catch (e) {
-      //   _logger.w('Firebase App Check activation failed (app continues without it): $e');
-      // }
+        _logger.i('Crashlytics initialized');
 
-      // 3. Analytics
-      _analytics = FirebaseAnalytics.instance;
-      await _analytics!.setAnalyticsCollectionEnabled(true);
-      _logger.i('Analytics initialized');
+        // 2b. Firebase App Check (CRIT-004 fix)
+        // Requires: flutter pub add firebase_app_check
+        // And Firebase Console setup: enable App Check with Play Integrity (Android)
+        // Uncomment below after adding the dependency:
+        // try {
+        //   await FirebaseAppCheck.instance.activate(
+        //     androidProvider: AndroidProvider.playIntegrity,
+        //   );
+        //   _logger.i('Firebase App Check activated');
+        // } catch (e) {
+        //   _logger.w('Firebase App Check activation failed (app continues without it): $e');
+        // }
 
-      // 4. Auth
-      _auth = FirebaseAuth.instance;
-      await _signInAnonymously();
-      _logger.i('Auth initialized (user: ${_auth!.currentUser?.uid})');
+        // 3. Analytics
+        _analytics = FirebaseAnalytics.instance;
+        await _analytics!.setAnalyticsCollectionEnabled(true);
+        _logger.i('Analytics initialized');
 
-      // 5. Firestore
-      _firestore = FirebaseFirestore.instance;
-      _logger.i('Firestore initialized');
+        // 4. Auth
+        _auth = FirebaseAuth.instance;
+        await _signInAnonymously();
+        _logger.i('Auth initialized (user: ${_auth!.currentUser?.uid})');
 
-      _initialized = true;
-      _logger.i('Firebase fully initialized');
+        // 5. Firestore
+        _firestore = FirebaseFirestore.instance;
+        _logger.i('Firestore initialized');
 
-      // Log app open
-      await logEvent('app_open', parameters: {
-        'platform': defaultTargetPlatform.name,
-      });
-    } catch (e, stack) {
-      _logger.e('Firebase initialization failed: $e');
-      _logger.e(stack.toString());
-      // App continues without Firebase — not critical for MVP
-      // SocketException errno=103 is expected on unstable networks
-      if (e.toString().contains('errno = 103') ||
-          e.toString().contains('Software caused connection abort')) {
-        _logger.w('Network error during Firebase init — continuing without Firebase');
+        _initialized = true;
+        _logger.i('Firebase fully initialized');
+
+        // Log app open
+        await logEvent('app_open', parameters: {
+          'platform': defaultTargetPlatform.name,
+        });
+
+        return; // Success — exit retry loop
+      } catch (e, stack) {
+        // CRASH-5 fix: Specifically catch network errors and retry
+        final errorStr = e.toString().toLowerCase();
+        final isNetworkError = errorStr.contains('errno = 103') ||
+            errorStr.contains('software caused connection abort') ||
+            errorStr.contains('socketexception') ||
+            errorStr.contains('connection refused') ||
+            errorStr.contains('network is unreachable');
+
+        if (isNetworkError && attempt < maxRetries) {
+          final delayMs = 1000 * (attempt + 1);
+          _logger.w('Network error during Firebase init (attempt ${attempt + 1}), retrying in ${delayMs}ms: $e');
+          await Future.delayed(Duration(milliseconds: delayMs));
+          continue; // Retry
+        }
+
+        // Non-retryable error or max retries reached
+        _logger.e('Firebase initialization failed: $e');
+        _logger.e(stack.toString());
+        if (isNetworkError) {
+          _logger.w('Network error during Firebase init — continuing without Firebase');
+        }
+        return; // Continue without Firebase
       }
     }
   }

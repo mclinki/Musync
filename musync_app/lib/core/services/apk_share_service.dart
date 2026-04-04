@@ -4,23 +4,30 @@ import 'dart:math';
 import 'package:flutter/services.dart';
 import 'package:logger/logger.dart';
 import '../app_constants.dart';
+import 'foreground_service.dart';
 
 /// Serves the APK file over HTTP on the local network.
 ///
 /// CRIT-003 fix: Binds to specific local IP (not anyIPv4) and requires
 /// a random access token in the URL to prevent unauthorized downloads.
+///
+/// APK-PERSIST fix: Starts a foreground service when sharing to keep the
+/// HTTP server alive even when the app goes to the background.
 class ApkShareService {
   static const int _defaultPort = 8080;
   static const String _channelName = AppConstants.foregroundServiceChannel;
 
   final Logger _logger;
+  final ForegroundService _foregroundService;
   HttpServer? _server;
   String? _apkTempPath;
   int _port = _defaultPort;
   /// Random access token for APK download (CRIT-003 fix).
   String? _accessToken;
 
-  ApkShareService({Logger? logger}) : _logger = logger ?? Logger();
+  ApkShareService({Logger? logger, ForegroundService? foregroundService})
+      : _logger = logger ?? Logger(),
+        _foregroundService = foregroundService ?? ForegroundService();
 
   /// Whether the HTTP server is running.
   bool get isRunning => _server != null;
@@ -65,12 +72,20 @@ class ApkShareService {
       _accessToken = _generateToken();
       _logger.i('APK share access token generated');
 
-      // 4. Start HTTP server — bind to specific local IP only (CRIT-003 fix)
+      // 4. Start foreground service to keep the app alive while sharing (APK-PERSIST fix)
+      try {
+        await _foregroundService.start(title: 'Partage APK MusyncMIMO');
+        _logger.i('Foreground service started for APK sharing');
+      } catch (e) {
+        _logger.w('Failed to start foreground service for APK share: $e (server will still run)');
+      }
+
+      // 5. Start HTTP server — bind to specific local IP only (CRIT-003 fix)
       _port = port;
       _server = await HttpServer.bind(InternetAddress(localIp), _port);
       _logger.i('APK share server started on $localIp:$_port');
 
-      // 5. Listen for requests
+      // 6. Listen for requests
       _server!.listen((HttpRequest request) async {
         await _handleRequest(request);
       });
@@ -88,6 +103,14 @@ class ApkShareService {
     await _server?.close(force: true);
     _server = null;
     _accessToken = null;
+
+    // Stop foreground service (APK-PERSIST fix)
+    try {
+      await _foregroundService.stop();
+      _logger.i('Foreground service stopped after APK share');
+    } catch (e) {
+      _logger.w('Failed to stop foreground service: $e');
+    }
 
     // Clean up temp APK file
     if (_apkTempPath != null) {

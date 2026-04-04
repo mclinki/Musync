@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:basic_utils/basic_utils.dart';
 import 'package:logger/logger.dart';
@@ -71,10 +72,14 @@ class WebSocketServer {
         _logger = logger ?? Logger();
 
   /// Generate a random numeric PIN for session authentication.
+  /// C5 fix: Use cryptographically secure random instead of time-based.
+  /// Guarantees a 6-digit PIN in range [100000, 999999].
   static String _generatePin() {
-    final random = DateTime.now().millisecondsSinceEpoch;
-    final pin = (random % 900000 + 100000).toString(); // 6-digit PIN
-    return pin;
+    final random = Random.secure();
+    // First digit: 1-9 (no leading zero), remaining 5 digits: 0-9
+    final firstDigit = random.nextInt(9) + 1;
+    final remaining = List.generate(5, (_) => random.nextInt(10)).join();
+    return '$firstDigit$remaining';
   }
 
   // ── Public API ──
@@ -295,6 +300,39 @@ class WebSocketServer {
     await broadcast(message);
   }
 
+  /// Broadcast full session context to a specific reconnecting slave (AGENT-9).
+  /// Used to restore the slave's state after reconnection without replaying all events.
+  Future<void> sendContextSync({
+    required String deviceId,
+    required String sessionId,
+    required String state,
+    Map<String, dynamic>? currentTrack,
+    required int positionMs,
+    required double volume,
+    List<Map<String, dynamic>>? playlistTracks,
+    required int currentIndex,
+    String? repeatMode,
+    bool? isShuffled,
+    int? serverTimeMs,
+    int version = 2,
+  }) async {
+    final message = ProtocolMessage.contextSync(
+      sessionId: sessionId,
+      state: state,
+      currentTrack: currentTrack,
+      positionMs: positionMs,
+      volume: volume,
+      playlistTracks: playlistTracks,
+      currentIndex: currentIndex,
+      repeatMode: repeatMode,
+      isShuffled: isShuffled,
+      serverTimeMs: serverTimeMs ?? clockSync.syncedTimeMs,
+      version: version,
+    );
+    _logger.i('Sending contextSync to $deviceId: state=$state, position=${positionMs}ms');
+    await sendToSlave(deviceId, message);
+  }
+
   /// Send a message to a specific slave.
   Future<void> sendToSlave(String deviceId, ProtocolMessage message) async {
     final slave = _slaves[deviceId];
@@ -356,6 +394,11 @@ class WebSocketServer {
       );
     } catch (e) {
       _logger.e('WebSocket upgrade failed: $e');
+      // H4 fix: close the HTTP response if upgrade failed
+      try {
+        request.response.statusCode = 400;
+        await request.response.close();
+      } catch (_) {}
     }
   }
 
@@ -392,6 +435,10 @@ class WebSocketServer {
             break;
           case MessageType.guestResume:
             _handleGuestResume(socket, message);
+            break;
+          case MessageType.contextSync:
+            // Context sync is host→slave only; ignore if received from slave
+            _logger.d('Ignoring contextSync from slave (host-only message)');
             break;
           default:
             _logger.w('Unhandled message type: ${message.type}');
@@ -438,10 +485,10 @@ class WebSocketServer {
       return;
     }
 
-    // CRIT-002 fix: Verify session PIN
+    // PIN verification (optional — if no PIN is set on the host, any join is accepted)
     final providedPin = message.payload['session_pin'] as String?;
-    if (providedPin == null || providedPin != sessionPin) {
-      _logger.w('Join rejected: invalid session PIN');
+    if (sessionPin.isNotEmpty && (providedPin == null || providedPin.isEmpty || providedPin != sessionPin)) {
+      _logger.w('Join rejected: invalid session PIN (expected: ${sessionPin.substring(0, 2)}***)');
       socket.add(ProtocolMessage.reject(reason: 'Invalid session PIN').encode());
       socket.close();
       return;
@@ -477,6 +524,7 @@ class WebSocketServer {
       type: ServerEventType.deviceConnected,
       deviceId: device.id,
       deviceName: device.name,
+      isReconnection: isReconnection,
     ));
   }
 
@@ -611,7 +659,8 @@ class WebSocketServer {
 
     // Send heartbeat to remaining slaves
     final heartbeat = ProtocolMessage.heartbeat();
-    for (final slave in _slaves.values) {
+    // H5 fix: copy slaves list to avoid ConcurrentModificationError
+    for (final slave in [..._slaves.values]) {
       try {
         slave.socket.add(heartbeat.encode());
       } catch (e) {
@@ -659,6 +708,7 @@ class ServerEvent {
   final String deviceName;
   final String? reason;
   final dynamic data; // Binary data for file transfer chunks
+  final bool isReconnection; // AGENT-9: true if device was previously connected
 
   const ServerEvent({
     required this.type,
@@ -666,5 +716,6 @@ class ServerEvent {
     required this.deviceName,
     this.reason,
     this.data,
+    this.isReconnection = false,
   });
 }

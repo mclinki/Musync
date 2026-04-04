@@ -2,6 +2,41 @@
 
 All notable changes to MusyncMIMO will be documented in this file.
 
+## [0.1.45] - 2026-04-04 — Critical Bug Fixes (10 CRIT + 8 HIGH resolved)
+
+### Critical Fixes
+- **C1** — Reconnection permanently blocked after first failure: `_isReconnecting` flag now properly reset in `_doConnect()` catch block
+- **C2** — Fire-and-forget async timer callback in reconnect now wrapped in try/catch to prevent isolate crash
+- **C3** — Stream subscription leak on failed `joinSession()`: subscription now cancelled on connection failure
+- **C4** — Unexpected disconnect handler now fully cleans up timers, foreground service, and playback coordinator state
+- **C5** — Session PIN now generated with `Random.secure()` instead of predictable `DateTime.now()`
+- **C6** — `_handleReject` now closes socket and resets connection state on join rejection
+- **C7** — Client heartbeat now sends `heartbeat()` (ping) instead of `heartbeatAck()` — fixes false timeout disconnects
+- **C8** — Race condition on `_server!` force-unwrap: captured to local variable before async operations in `playTrack()` and `resumePlayback()`
+- **C9** — Late-compensation seek now clamped to `[0, duration]` to prevent invalid seek positions
+- **C10** — Race between `_autoPreloadTrack` and `handlePlayCommand`: added `_isAudioEngineBusy` mutex
+
+### High Priority Fixes
+- **H1** — Playback commands now gated behind `_isAuthenticated` flag — no commands processed before welcome message
+- **H2** — `_handleError` now cancels `_reconnectTimer` to prevent stale timer firing
+- **H3** — `completeError` on already-completed completer now wrapped in try/catch
+- **H4** — WebSocket upgrade failure now properly closes the HTTP response
+- **H5** — `_checkHeartbeats` now copies slaves list before iteration to prevent `ConcurrentModificationError`
+- **H6** — `disconnect()` now checks `_userDisconnected` after async connect to prevent connecting after user requested disconnect
+- **H7** — `handlePauseCommand` and `handleSeekCommand` now wrapped in try/catch
+- **H8** — File transfer failure on host now logged as warning (slaves will skip silently)
+
+## [0.1.44] - 2026-04-04 — CRIT-002 Fix: Session PIN Authentication
+
+### Bug Fix
+- **CRIT-002 (complete)** — Session PIN authentication is now fully wired end-to-end. The `DiscoveryBloc` was calling `joinSession()` without passing the `sessionPin`, causing the host to reject every join attempt with "Invalid session PIN". This fix adds a PIN input dialog in the UI and threads the PIN through the entire join flow.
+
+### Changed
+- `JoinSessionRequested` event now accepts optional `sessionPin` parameter
+- `DiscoveryScreen` shows a PIN input dialog before joining (both device tap and manual IP entry)
+- Host view now displays the session PIN prominently so it can be shared with guests
+- Updated 3 tests in `discovery_bloc_test.dart` to include `sessionPin` parameter
+
 ## [0.1.39] - 2026-04-04 — HIGH Priority Performance & Architecture Fixes
 
 ### Performance

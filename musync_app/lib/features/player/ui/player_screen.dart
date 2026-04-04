@@ -108,9 +108,10 @@ class _PlayerView extends StatelessWidget {
 
                 const SizedBox(height: 32),
 
-                // Volume control
+                // Volume control — VOLUME 1: listens to system volume stream
                 _VolumeControl(
                   volume: state.volume,
+                  systemVolumeStream: context.read<PlayerBloc>().systemVolume.volumeStream,
                   onChanged: (volume) {
                     context.read<PlayerBloc>().add(VolumeChanged(volume));
                   },
@@ -520,39 +521,83 @@ class _PlaybackControls extends StatelessWidget {
   }
 }
 
-class _VolumeControl extends StatelessWidget {
+class _VolumeControl extends StatefulWidget {
   final double volume;
+  final Stream<double> systemVolumeStream;
   final ValueChanged<double> onChanged;
 
   const _VolumeControl({
     required this.volume,
+    required this.systemVolumeStream,
     required this.onChanged,
   });
 
   @override
+  State<_VolumeControl> createState() => _VolumeControlState();
+}
+
+class _VolumeControlState extends State<_VolumeControl> {
+  double? _dragValue;
+  bool _isDragging = false;
+  double _currentVolume = 1.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentVolume = widget.volume;
+    widget.systemVolumeStream.listen((volume) {
+      if (!_isDragging && mounted) {
+        setState(() => _currentVolume = volume);
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(_VolumeControl oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_isDragging) {
+      _currentVolume = widget.volume;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final displayVolume = _isDragging ? (_dragValue ?? _currentVolume) : _currentVolume;
+
     return Row(
       children: [
         Icon(
-          volume == 0
+          displayVolume == 0
               ? Icons.volume_off
-              : volume < 0.5
+              : displayVolume < 0.5
                   ? Icons.volume_down
                   : Icons.volume_up,
           color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
         Expanded(
           child: Slider(
-            value: volume,
+            value: displayVolume,
             min: 0,
             max: 1,
-            onChanged: onChanged,
+            onChanged: (value) {
+              setState(() {
+                _dragValue = value;
+                _isDragging = true;
+              });
+            },
+            onChangeEnd: (value) {
+              setState(() {
+                _isDragging = false;
+                _dragValue = null;
+              });
+              widget.onChanged(value);
+            },
           ),
         ),
         SizedBox(
           width: 40,
           child: Text(
-            '${(volume * 100).round()}%',
+            '${(displayVolume * 100).round()}%',
             style: Theme.of(context).textTheme.bodySmall,
             textAlign: TextAlign.end,
           ),

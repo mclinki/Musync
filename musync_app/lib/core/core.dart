@@ -16,3 +16,4 @@ export 'services/metadata_service.dart';
 export 'services/permission_service.dart';
 export 'services/apk_share_service.dart';
 export 'services/update_service.dart';
+export 'services/system_volume_service.dart';

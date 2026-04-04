@@ -277,6 +277,8 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
   final SessionManager sessionManager;
   /// HIGH-008 fix: Direct AudioEngine injection (Law of Demeter).
   final AudioEngine audioEngine;
+  /// VOLUME 1: System volume service (controls hardware volume, not just_audio internal).
+  final SystemVolumeService systemVolume;
   final FirebaseService _firebase;
   final Logger _logger;
   final SharedPreferences? _prefs;
@@ -289,10 +291,12 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
   StreamSubscription? _fileTransferSub;
   StreamSubscription? _connectedDevicesSub;
   StreamSubscription? _allGuestsReadySub;
+  StreamSubscription? _systemVolumeSub;
 
   PlayerBloc({
     required this.sessionManager,
     required this.audioEngine,
+    required this.systemVolume,
     FirebaseService? firebase,
     Logger? logger,
     SharedPreferences? prefs,
@@ -399,6 +403,12 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     _allGuestsReadySub = sessionManager.allGuestsReadyStream.listen((ready) {
       if (_isClosed) return;
       add(_AllGuestsReadyUpdated(ready));
+    });
+
+    // Listen to system volume changes (hardware buttons, etc.)
+    _systemVolumeSub = systemVolume.volumeStream.listen((volume) {
+      if (_isClosed) return;
+      add(VolumeChanged(volume));
     });
 
     // Charger la playlist sauvegardée au démarrage
@@ -807,7 +817,8 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     Emitter<PlayerState> emit,
   ) async {
     try {
-      await audioEngine.setVolume(event.volume);
+      // VOLUME 1: Set system volume instead of just_audio internal volume
+      await systemVolume.setVolume(event.volume);
       emit(state.copyWith(volume: event.volume));
       // Broadcast volume to slaves if host
       if (sessionManager.role == DeviceRole.host) {
@@ -1004,7 +1015,7 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
     Emitter<PlayerState> emit,
   ) {
     emit(state.copyWith(volume: event.volume));
-    audioEngine.setVolume(event.volume);
+    systemVolume.setVolume(event.volume);
     _logger.i('Remote volume set to: ${event.volume}');
   }
 
@@ -1064,16 +1075,19 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
   }
 
   @override
-  Future<void> close() {
+  Future<void> close() async {
     _isClosed = true;
-    _stateSub?.cancel();
-    _sessionStateSub?.cancel();
-    _positionSub?.cancel();
-    _clientEventSub?.cancel();
-    _syncQualitySub?.cancel();
-    _fileTransferSub?.cancel();
-    _connectedDevicesSub?.cancel();
-    _allGuestsReadySub?.cancel();
+    // CRASH-3/10 fix: Cancel ALL subscriptions BEFORE calling super.close()
+    // This prevents stream callbacks from firing add() on a closed BLoC
+    await _stateSub?.cancel();
+    await _sessionStateSub?.cancel();
+    await _positionSub?.cancel();
+    await _clientEventSub?.cancel();
+    await _syncQualitySub?.cancel();
+    await _fileTransferSub?.cancel();
+    await _connectedDevicesSub?.cancel();
+    await _allGuestsReadySub?.cancel();
+    await _systemVolumeSub?.cancel();
     return super.close();
   }
 }

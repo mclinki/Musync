@@ -99,6 +99,16 @@ class AutoRejoinToggled extends SettingsEvent {
   List<Object?> get props => [enabled];
 }
 
+/// Toggle WebSocket TLS encryption at runtime.
+class TlsToggled extends SettingsEvent {
+  final bool enabled;
+
+  const TlsToggled(this.enabled);
+
+  @override
+  List<Object?> get props => [enabled];
+}
+
 // ── State ──
 
 class SettingsState extends Equatable {
@@ -128,6 +138,9 @@ class SettingsState extends Equatable {
   final int playDelayMs;
   final bool autoRejoinLastSession;
 
+  // Network
+  final bool useTls;
+
   const SettingsState({
     this.themeMode = ThemeMode.system,
     this.deviceName = 'MusyncMIMO Device',
@@ -146,6 +159,7 @@ class SettingsState extends Equatable {
     this.joinNotificationEnabled = true,
     this.playDelayMs = 5000,
     this.autoRejoinLastSession = false,
+    this.useTls = false,
   });
 
   SettingsState copyWith({
@@ -170,6 +184,7 @@ class SettingsState extends Equatable {
     bool? joinNotificationEnabled,
     int? playDelayMs,
     bool? autoRejoinLastSession,
+    bool? useTls,
   }) {
     return SettingsState(
       themeMode: themeMode ?? this.themeMode,
@@ -189,6 +204,7 @@ class SettingsState extends Equatable {
       joinNotificationEnabled: joinNotificationEnabled ?? this.joinNotificationEnabled,
       playDelayMs: playDelayMs ?? this.playDelayMs,
       autoRejoinLastSession: autoRejoinLastSession ?? this.autoRejoinLastSession,
+      useTls: useTls ?? this.useTls,
     );
   }
 
@@ -211,6 +227,7 @@ class SettingsState extends Equatable {
         joinNotificationEnabled,
         playDelayMs,
         autoRejoinLastSession,
+        useTls,
       ];
 }
 
@@ -250,6 +267,7 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     on<JoinNotificationToggled>(_onJoinNotificationToggled);
     on<PlayDelayChanged>(_onPlayDelayChanged);
     on<AutoRejoinToggled>(_onAutoRejoinToggled);
+    on<TlsToggled>(_onTlsToggled);
   }
 
   Future<void> _onLoadSettings(
@@ -269,6 +287,7 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
       final joinNotificationEnabled = _prefs.getBool('join_notification_enabled') ?? true;
       final playDelayMs = _prefs.getInt('play_delay_ms') ?? 5000;
       final autoRejoinLastSession = _prefs.getBool('auto_rejoin_last_session') ?? false;
+      final useTls = _prefs.getBool('use_tls') ?? AppConstants.useTls;
 
       emit(SettingsState(
         themeMode: themeMode,
@@ -280,6 +299,7 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
         joinNotificationEnabled: joinNotificationEnabled,
         playDelayMs: playDelayMs,
         autoRejoinLastSession: autoRejoinLastSession,
+        useTls: useTls,
       ));
     } catch (e, stack) {
       _logger.e('Failed to load settings: $e');
@@ -556,5 +576,16 @@ class SettingsBloc extends Bloc<SettingsEvent, SettingsState> {
     await _prefs.setBool('auto_rejoin_last_session', event.enabled);
     emit(state.copyWith(autoRejoinLastSession: event.enabled, clearError: true));
     _logger.i('Auto-rejoin ${event.enabled ? "enabled" : "disabled"}');
+  }
+
+  Future<void> _onTlsToggled(
+    TlsToggled event,
+    Emitter<SettingsState> emit,
+  ) async {
+    await _prefs.setBool('use_tls', event.enabled);
+    emit(state.copyWith(useTls: event.enabled, clearError: true));
+    _logger.i('WebSocket TLS ${event.enabled ? "enabled (wss://)" : "disabled (ws://)"}');
+    // Notify SessionManager to apply the change
+    _sessionManager.setUseTls(event.enabled);
   }
 }

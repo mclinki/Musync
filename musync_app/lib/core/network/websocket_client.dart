@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:logger/logger.dart';
 import '../app_constants.dart';
 import '../models/models.dart';
@@ -27,6 +29,7 @@ class WebSocketClient {
 
   // Connection state
   bool _isConnected = false;
+  bool _isAuthenticated = false; // Set to true only after receiving welcome message
   bool _isReconnecting = false;
   bool _userDisconnected = false;
   String? _sessionId;
@@ -80,6 +83,14 @@ class WebSocketClient {
 
   /// Connect to the host WebSocket server.
   Future<bool> connect({required DeviceInfo localDevice}) async {
+    // Close existing connection if any (C4 fix: prevent socket leak on re-connect)
+    if (_isConnected && _socket != null) {
+      try {
+        await _socket!.close();
+      } catch (_) {}
+      _socket = null;
+      _isConnected = false;
+    }
     _localDevice = localDevice;
     _userDisconnected = false;
     _reconnectAttempts = 0;
@@ -186,6 +197,7 @@ class WebSocketClient {
       }
 
       _isConnected = true;
+      _isAuthenticated = false; // Only set to true after welcome message (H1 fix)
       _isReconnecting = false;
       _reconnectAttempts = 0;
       _logger.i('Connected to host');
@@ -200,11 +212,20 @@ class WebSocketClient {
       final joinMsg = ProtocolMessage.join(device: _localDevice!, sessionPin: sessionPin);
       _socket!.add(joinMsg.encode());
 
+      // H4 fix: Check if user disconnected while we were connecting
+      if (_userDisconnected) {
+        await _socket!.close();
+        _socket = null;
+        _isConnected = false;
+        return false;
+      }
+
       _eventController.add(const ClientEvent(type: ClientEventType.connected));
       return true;
     } catch (e) {
       _logger.e('Connection failed: $e');
       _isConnected = false;
+      _isReconnecting = false; // C1 fix: reset flag so reconnect can proceed
 
       // Try to reconnect if not manually disconnected
       if (!_userDisconnected) {
@@ -215,17 +236,23 @@ class WebSocketClient {
     }
   }
 
-  /// Connect via WSS, validating the server certificate.
+  /// Generate a random Sec-WebSocket-Key (16 bytes base64-encoded).
+  static String _generateWebSocketKey() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    return base64Encode(bytes);
+  }
+
+  /// Connect via WSS using HttpClient with custom certificate validation.
   ///
-  /// If [AppConstants.expectedCertFingerprint] is set, the certificate SHA-1
-  /// is pinned. Otherwise, a warning is logged and any certificate is accepted
-  /// (legacy mode — NOT recommended for production).
+  /// HttpClient properly handles HTTP response parsing internally, and
+  /// `detachSocket()` returns a fresh socket that hasn't been listened to,
+  /// avoiding the "Stream has already been listened to" error.
   Future<WebSocket> _connectWss(String uri) async {
     final expectedFingerprint = AppConstants.expectedCertFingerprint.trim();
 
     final httpClient = HttpClient()
       ..badCertificateCallback = (cert, host, port) {
-        // CRIT-001 fix: Certificate pinning
         if (expectedFingerprint.isNotEmpty) {
           final actualFingerprint = cert.sha1
               .map((b) => b.toRadixString(16).padLeft(2, '0'))
@@ -237,17 +264,23 @@ class WebSocketClient {
           }
           return match;
         }
-        // Legacy fallback — warn but accept (should NOT be used in production)
         _logger.w('⚠️ No cert fingerprint configured — accepting any certificate (CRIT-001)');
         return true;
       };
 
     try {
-      // HttpClient.getUrl does not support 'wss://' — convert to 'https://'
-      // for the HTTP upgrade request.
-      final httpsUri = Uri.parse(uri.replaceFirst('wss://', 'https://'));
+      final uriObj = Uri.parse(uri);
+      final httpsUri = uriObj.replace(scheme: 'https');
+
       final request = await httpClient.getUrl(httpsUri)
           .timeout(const Duration(milliseconds: AppConstants.connectionTimeoutMs));
+
+      // WebSocket upgrade headers
+      request.headers.set(HttpHeaders.upgradeHeader, 'websocket');
+      request.headers.set(HttpHeaders.connectionHeader, 'Upgrade');
+      request.headers.set('Sec-WebSocket-Key', _generateWebSocketKey());
+      request.headers.set('Sec-WebSocket-Version', '13');
+
       final response = await request.close()
           .timeout(const Duration(milliseconds: AppConstants.connectionTimeoutMs));
 
@@ -255,8 +288,14 @@ class WebSocketClient {
         throw Exception('WebSocket upgrade failed: ${response.statusCode}');
       }
 
+      // detachSocket() returns a fresh socket after HTTP headers are consumed
       final socket = await response.detachSocket();
-      return WebSocket.fromUpgradedSocket(socket, serverSide: false);
+      try {
+        return WebSocket.fromUpgradedSocket(socket, serverSide: false);
+      } catch (e) {
+        socket.destroy();
+        rethrow;
+      }
     } finally {
       httpClient.close(force: true);
     }
@@ -296,14 +335,26 @@ class WebSocketClient {
     ));
 
     _reconnectTimer = Timer(Duration(milliseconds: delayMs), () async {
-      if (_userDisconnected) return;
+      try { // C2 fix: wrap async timer callback in try/catch
+        if (_userDisconnected) return;
 
-      _logger.i('Reconnect attempt $_reconnectAttempts...');
-      final success = await _doConnect();
+        _logger.i('Reconnect attempt $_reconnectAttempts...');
+        final success = await _doConnect();
 
-      if (success && _localDevice != null) {
-        _logger.i('Reconnected! Re-syncing clocks...');
-        await synchronize();
+        if (success && _localDevice != null) {
+          _logger.i('Reconnected! Re-syncing clocks...');
+          final syncOk = await synchronize();
+          if (!syncOk) { // H5 fix: emit event on sync failure after reconnect
+            _eventController.add(const ClientEvent(
+              type: ClientEventType.error,
+              message: 'Clock sync failed after reconnect',
+            ));
+          }
+        }
+      } catch (e) {
+        _logger.e('Reconnect failed: $e');
+        _isReconnecting = false;
+        _scheduleReconnect();
       }
     });
   }
@@ -318,7 +369,9 @@ class WebSocketClient {
     // Clean up any previous pending sync
     if (_syncCompleter != null) {
       if (!_syncCompleter!.isCompleted) {
-        _syncCompleter!.completeError(TimeoutException('Superseded by new sync'));
+        try { // H3 fix: prevent StateError if completer completed between check and call
+          _syncCompleter!.completeError(TimeoutException('Superseded by new sync'));
+        } catch (_) {}
       }
       _syncCompleter = null;
     }
@@ -362,24 +415,31 @@ class WebSocketClient {
             _handleClockAdjust(message);
             break;
           case MessageType.prepare:
+            if (!_isAuthenticated) break; // H1 fix
             _handlePrepare(message);
             break;
           case MessageType.play:
+            if (!_isAuthenticated) break; // H1 fix
             _handlePlay(message);
             break;
           case MessageType.pause:
+            if (!_isAuthenticated) break; // H1 fix
             _handlePause(message);
             break;
           case MessageType.seek:
+            if (!_isAuthenticated) break; // H1 fix
             _handleSeek(message);
             break;
           case MessageType.skipNext:
+            if (!_isAuthenticated) break; // H1 fix
             _handleSkipNext(message);
             break;
           case MessageType.skipPrev:
+            if (!_isAuthenticated) break; // H1 fix
             _handleSkipPrev(message);
             break;
           case MessageType.playlistUpdate:
+            if (!_isAuthenticated) break; // H1 fix
             _handlePlaylistUpdate(message);
             break;
           case MessageType.heartbeat:
@@ -388,6 +448,7 @@ class WebSocketClient {
           case MessageType.fileTransferStart:
           case MessageType.fileTransferChunk:
           case MessageType.fileTransferEnd:
+            if (!_isAuthenticated) break; // H1 fix
             // File transfer messages are handled by the session manager
             _eventController.add(ClientEvent(
               type: ClientEventType.fileTransferMessage,
@@ -395,6 +456,7 @@ class WebSocketClient {
             ));
             break;
           case MessageType.apkTransferOffer:
+            if (!_isAuthenticated) break; // H1 fix
             // APK transfer offer from host
             _eventController.add(ClientEvent(
               type: ClientEventType.apkTransferOffer,
@@ -402,7 +464,12 @@ class WebSocketClient {
             ));
             break;
           case MessageType.volumeControl:
+            if (!_isAuthenticated) break; // H1 fix
             _handleVolumeControl(message);
+            break;
+          case MessageType.contextSync:
+            if (!_isAuthenticated) break; // H1 fix
+            _handleContextSync(message);
             break;
           default:
             _logger.d('Unhandled message type: ${message.type}');
@@ -422,7 +489,8 @@ class WebSocketClient {
   }
 
   void _handleWelcome(ProtocolMessage message) {
-    _sessionId = message.payload['session_id'] as String? ?? '';
+    _isAuthenticated = true; // H1 fix: only now can commands be processed
+    _sessionId = message.payload['session_id'] as String?;
     _logger.i('Joined session: $_sessionId');
 
     // Start heartbeat
@@ -441,6 +509,11 @@ class WebSocketClient {
   void _handleReject(ProtocolMessage message) {
     final reason = message.payload['reason'] as String? ?? 'Unknown reason';
     _logger.w('Join rejected: $reason');
+    // C6 fix: close socket and reset state on rejection
+    _isConnected = false;
+    _isAuthenticated = false;
+    _heartbeatTimer?.cancel();
+    _socket?.close();
     _eventController.add(ClientEvent(
       type: ClientEventType.rejected,
       message: reason,
@@ -590,11 +663,55 @@ class WebSocketClient {
     ));
   }
 
+  /// Handle full session context sync from host (AGENT-9).
+  /// Used when a slave reconnects and needs to restore its state.
+  void _handleContextSync(ProtocolMessage message) {
+    final payload = message.payload;
+
+    // Validate version
+    final version = (payload['version'] as num?)?.toInt() ?? 1;
+    if (version > 2) {
+      _logger.w('Context version mismatch: $version (expected <= 2)');
+    }
+
+    final sessionId = payload['session_id'] as String?;
+    final state = payload['state'] as String?;
+    final positionMs = (payload['position_ms'] as num?)?.toInt() ?? 0;
+    final volume = (payload['volume'] as num?)?.toDouble() ?? 1.0;
+    final serverTimeMs = (payload['server_time_ms'] as num?)?.toInt();
+
+    _logger.i(
+      'Received contextSync: session=$sessionId, state=$state, '
+      'position=${positionMs}ms, volume=$volume, version=$version',
+    );
+
+    _eventController.add(ClientEvent(
+      type: ClientEventType.contextSyncCommand,
+      sessionId: sessionId,
+      positionMs: positionMs,
+      volume: volume,
+      contextData: {
+        'session_id': sessionId,
+        'state': state,
+        'position_ms': positionMs,
+        'volume': volume,
+        'current_track': payload['current_track'],
+        'playlist_tracks': payload['playlist_tracks'],
+        'current_index': payload['current_index'],
+        'repeat_mode': payload['repeat_mode'],
+        'is_shuffled': payload['is_shuffled'],
+        'server_time_ms': serverTimeMs,
+        'version': version,
+      },
+    ));
+  }
+
   void _sendHeartbeat() {
     if (_isConnected && _socket != null) {
-      final ack = ProtocolMessage.heartbeatAck();
+      // C7 fix: send heartbeat (ping), not heartbeatAck — server expects pings from client
+      final heartbeat = ProtocolMessage.heartbeat();
       try {
-        _socket!.add(ack.encode());
+        _socket!.add(heartbeat.encode());
       } catch (e) {
         _logger.d('Heartbeat send error: $e');
       }
@@ -602,10 +719,13 @@ class WebSocketClient {
   }
 
   void _handleDisconnect() {
+    if (!_isConnected) return; // MED-003 fix: idempotent
     _logger.i('Disconnected from host');
     _isConnected = false;
+    _isAuthenticated = false;
     _heartbeatTimer?.cancel();
     _reconnectTimer?.cancel();
+    _reconnectTimer = null; // LOW-002 fix: null after cancel
 
     if (!_userDisconnected) {
       _logger.w('Unexpected disconnect, will attempt reconnect');
@@ -622,7 +742,9 @@ class WebSocketClient {
   void _handleError(dynamic error) {
     _logger.e('WebSocket error: $error');
     _isConnected = false;
+    _isAuthenticated = false;
     _heartbeatTimer?.cancel();
+    _reconnectTimer?.cancel(); // H2 fix: cancel reconnect timer in error handler too
 
     if (!_userDisconnected) {
       _scheduleReconnect();
@@ -655,6 +777,7 @@ enum ClientEventType {
   fileTransferMessage,
   fileTransferBinary,
   apkTransferOffer,
+  contextSyncCommand,   // AGENT-9: Full session context received from host
   error,
 }
 
@@ -672,6 +795,7 @@ class ClientEvent {
   final List<Map<String, dynamic>>? playlistTracks;
   final int? playlistCurrentIndex;
   final List<int>? binaryData;
+  final Map<String, dynamic>? contextData; // AGENT-9: Full context payload
 
   const ClientEvent({
     required this.type,
@@ -687,5 +811,6 @@ class ClientEvent {
     this.playlistTracks,
     this.playlistCurrentIndex,
     this.binaryData,
+    this.contextData,
   });
 }

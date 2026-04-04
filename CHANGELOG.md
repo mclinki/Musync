@@ -5,6 +5,178 @@
 
 ---
 
+## Session du 2026-04-04 (v0.1.46) — Compatibilité TLS par défaut + PIN optionnel + WSS fix
+
+### Contexte
+Le problème principal était un **mismatch TLS** : le mobile hôte utilisait WSS (TLS activé par défaut) mais le PC invité utilisait WS (TLS désactivé). Résultat : connexion impossible entre PC et mobile. Cette session résout le problème en désactivant TLS par défaut pour tous les appareils, rend le PIN optionnel, et corrige le handshake WSS.
+
+### Modifications
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 1 | `FIX` | **TLS par défaut désactivé** : `AppConstants.useTls` `true` → `false`. PC ↔ Mobile et Mobile ↔ Mobile compatibles par défaut. | `app_constants.dart`, `settings_bloc.dart` |
+| 2 | `FEAT` | **PIN optionnel** : Le serveur accepte les joins sans PIN si `sessionPin.isEmpty`. Bouton "Passer" dans le dialog PIN. | `websocket_server.dart`, `discovery_screen.dart` |
+| 3 | `FIX` | **WSS handshake** : `_connectWss` utilise `HttpClient` + `detachSocket()` au lieu de `SecureSocket` manuel. Élimine "Stream has already been listened to". | `websocket_client.dart` |
+| 4 | `FEAT` | **Toggle TLS fonctionnel** : `TlsToggled` event + `useTls` dans SettingsState + switch UI connecté au BLoC + persistance SharedPreferences. | `settings_bloc.dart`, `settings_screen.dart`, `session_manager.dart` |
+| 5 | `FIX` | **PIN généré sécurisé** : Premier chiffre 1-9 (plus de PIN < 100000). | `websocket_server.dart` |
+| 6 | `FIX` | **Double dispose** : `safePinDispose()` avec guard dans `_showPinDialog`. | `discovery_screen.dart` |
+| 7 | `CHORE` | Version sync `0.1.45+45` → `0.1.46+46` | `pubspec.yaml`, `app_constants.dart` |
+| 8 | `TEST` | Tests unitaires : 213/213 passent (zéro régression) | — |
+
+### Détails techniques
+
+**TLS par défaut désactivé** :
+- `AppConstants.useTls` : `true` → `false` (mutable, pas const)
+- `SettingsState.useTls` : `true` → `false` (défaut)
+- Fallback SharedPreferences : `_prefs.getBool('use_tls') ?? AppConstants.useTls`
+- Résultat : tous les appareils utilisent `ws://` par défaut, compatible entre eux sans configuration
+
+**PIN optionnel** :
+- Serveur : `if (sessionPin.isNotEmpty && (providedPin == null || providedPin.isEmpty || providedPin != sessionPin))` → rejette
+- Si `sessionPin.isEmpty` : accepte tout join, même sans PIN
+- UI : bouton "Passer" dans le dialog PIN → `JoinSessionRequested(device)` sans sessionPin
+
+**WSS handshake** :
+- Ancienne approche : `SecureSocket.connect()` + lecture manuelle des headers HTTP → "Stream has already been listened to"
+- Nouvelle approche : `HttpClient` avec `badCertificateCallback` + `getUrl(httpsUri)` + headers WebSocket + `response.detachSocket()` → socket frais jamais écouté
+
+**Toggle TLS** :
+- `SettingsState` : nouveau champ `useTls` (défaut: false)
+- `TlsToggled` event → persiste dans SharedPreferences (`use_tls`) → appelle `SessionManager.setUseTls()`
+- `SessionManager.setUseTls()` : met à jour `AppConstants.useTls` pour les prochaines connexions
+- UI : switch dans Paramètres → Réseau → "Chiffrement WebSocket"
+
+---
+
+## Session du 2026-04-04 (v0.1.43) — Fix bugs Crashlytics récurrents
+
+### Contexte
+Analyse des données Crashlytics : 6 bugs marqués "FIXÉ" persistent en réalité jusqu'à v0.1.35+. Les correctifs précédents étaient incomplets ou ne traitaient pas la cause racine. Cette session corrige définitivement 5 bugs récurrents.
+
+### Modifications
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 1 | `FIX` | **CRASH-3/10** BLoC `close()` n'attendait pas les subscriptions avant `super.close()` → events `add()` sur BLoC fermé. Passage à `async close()` avec `await` sur chaque subscription. | `discovery_bloc.dart`, `player_bloc.dart` |
+| 2 | `FIX` | **CRASH-4A** `TextEditingController` créé dans le `builder` de dialog → recréé à chaque rebuild + disposed prématurément. Controller déplacé hors du builder + `safeDispose()` garanti via `.then()` sur `showDialog`. | `settings_screen.dart` |
+| 3 | `FIX` | **CRASH-2** `addPostFrameCallback` dans `build()` sans guard → callbacks dupliqués → Duplicate GlobalKeys. Ajout de flag `_snackBarScheduled` + conversion en `StatefulWidget`. | `settings_screen.dart` |
+| 4 | `FIX` | **CRASH-5** Firebase init sans retry sur erreurs réseau → `SocketException errno=103` enregistré comme FATAL. Ajout de délai 500ms avant init + retry avec backoff exponentiel (2 tentatives). | `firebase_service.dart` |
+| 5 | `FIX` | **CRASH-9** mDNS `MDnsClient.lookup` sans gestion d'erreur SocketException → crash FATAL. Ajout de logging spécifique + fallback TCP subnet scan. | `device_discovery.dart` |
+| 6 | `CHORE` | Version sync `0.1.42+42` → `0.1.43+43` | `pubspec.yaml`, `app_constants.dart` |
+| 7 | `TEST` | Tests unitaires : 213/213 passent (zéro régression) | — |
+
+### Détails techniques
+
+**CRASH-3/10 — BLoC close() race condition** :
+- Cause : `close()` appelait `super.close()` SANS attendre la cancellation des subscriptions
+- Résultat : les callbacks stream continuaient de fire `add()` après que le BLoC soit fermé
+- Fix : `close()` devient `async` et `await` chaque subscription avant `super.close()`
+- Impact : élimine `InheritedElement.debugDeactivated` et `BuildScope._flushDirtyElements`
+
+**CRASH-4A — TextEditingController use-after-dispose** :
+- Cause : Controller créé dans `builder` → recréé à chaque rebuild du dialog
+- Le pattern `safeDispose()` existait mais l'ordre d'appel était incorrect
+- Fix : Controller créé AVANT `showDialog`, `safeDispose()` garanti via `.then((_) => safeDispose())`
+- Suppression du `StatefulBuilder` inutile et du `PopScope` redondant
+
+**CRASH-2 — Duplicate GlobalKeys** :
+- Cause : `addPostFrameCallback` appelé dans `build()` sans guard → multiple callbacks schedulés
+- Chaque callback crée un `ScaffoldMessenger` avec le même GlobalKey
+- Fix : Conversion `_SettingsView` en `StatefulWidget` + flag `_snackBarScheduled`
+
+**CRASH-5 — Firebase SocketException errno=103** :
+- Cause : Firebase init trop rapide après le démarrage, réseau pas encore stable
+- Le catch existait mais l'erreur était déjà enregistrée comme FATAL par Crashlytics
+- Fix : Délai 500ms avant init + retry avec backoff (1s, 2s) pour les erreurs réseau
+
+**CRASH-9 — mDNS SocketException** :
+- Cause : Port 5353 souvent occupé par le système Android
+- Fix : Logging spécifique pour distinguer les erreurs socket + fallback TCP uniquement
+
+---
+
+## Session du 2026-04-04 (v0.1.42) — AGENT-12: Tests de migration de schéma
+
+### Contexte
+Ajout de 7 tests complets pour la migration de schéma SessionContext v1→v2 (AGENT-12). Couvre les cas nominaux, edge cases et robustesse.
+
+### Modifications
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 1 | `TEST` | **AGENT-12** v1 full data → v2 : préserve tous les champs + ajoute volumes/clockOffsets | `session_context_test.dart` |
+| 2 | `TEST` | **AGENT-12** v2 roundtrip : toJson→fromJson préserve volumes et clockOffsets | `session_context_test.dart` |
+| 3 | `TEST` | **AGENT-12** v1 minimal : champs optionnels manquants → defaults sûrs | `session_context_test.dart` |
+| 4 | `TEST` | **AGENT-12** Unknown state fallback : état inconnu → waiting (safe default) | `session_context_test.dart` |
+| 5 | `TEST` | **AGENT-12** Numeric types : position_ms, volume, current_index parsés correctement | `session_context_test.dart` |
+| 6 | `TEST` | **AGENT-12** Immutabilité : migration ne mute pas le JSON original | `session_context_test.dart` |
+| 7 | `TEST` | **AGENT-12** Future version : v99 géré sans crash (no-op) | `session_context_test.dart` |
+| 8 | `CHORE` | Version sync `0.1.41+41` → `0.1.42+42` | `pubspec.yaml`, `app_constants.dart` |
+| 9 | `TEST` | Tests unitaires : 206 → **213** (+7 nouveaux) | — |
+
+---
+
+## Session du 2026-04-04 (v0.1.41) — AGENT-9: contextSync protocol + VOLUME 1 fix
+
+### Contexte
+Implémentation du message `contextSync` au protocole WebSocket (AGENT-9) pour permettre la restauration complète du contexte d'un esclave lors de sa reconnexion. Fix concomitant de l'API `volume_controller` (breaking change 3.4.4) et du test `VolumeChanged`.
+
+### Modifications
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 1 | `FEAT` | **AGENT-9** `MessageType.contextSync` ajouté au protocole | `protocol_message.dart` |
+| 2 | `FEAT` | **AGENT-9** `ProtocolMessage.contextSync()` factory avec sessionId, state, track, position, volume, playlist, serverTime, version | `protocol_message.dart` |
+| 3 | `FEAT` | **AGENT-9** `WebSocketServer.sendContextSync()` — envoi du contexte complet à un esclave reconnecté | `websocket_server.dart` |
+| 4 | `FEAT` | **AGENT-9** `ServerEvent.isReconnection` flag pour distinguer fresh join vs reconnexion | `websocket_server.dart` |
+| 5 | `FEAT` | **AGENT-9** `ClientEventType.contextSyncCommand` + `_handleContextSync()` côté client | `websocket_client.dart` |
+| 6 | `FEAT` | **AGENT-9** `ClientEvent.contextData` field pour transporter le payload complet | `websocket_client.dart` |
+| 7 | `FEAT` | **AGENT-9** `_handleContextSyncCommand()` + `_sendContextToReconnectingSlave()` dans SessionManager | `session_manager.dart` |
+| 8 | `FIX` | **VOLUME 1** `SystemVolumeService` — migration API `volume_controller` 3.4.4 : `VolumeController()` → `.instance`, `.listener()` → `.addListener()` | `system_volume_service.dart` |
+| 9 | `FIX` | Test `VolumeChanged` — mock `systemVolume.setVolume()` au lieu de `audioEngine.setVolume()` | `player_bloc_test.dart` |
+| 10 | `CHORE` | Version sync `0.1.40+40` → `0.1.41+41` | `pubspec.yaml`, `app_constants.dart` |
+| 11 | `TEST` | Tests unitaires : 206/206 passent (zéro régression) | — |
+
+### Détails techniques
+
+**AGENT-9 — Context sync sur reconnexion** :
+- Flux : esclave se reconnecte → host détecte `isReconnection` → envoie `contextSync` → esclave restaure état
+- `contextSync` payload : session_id, state, current_track, position_ms, volume, playlist_tracks, current_index, repeat_mode, is_shuffled, server_time_ms, version
+- Backward compatible : nouveau type de message, les anciens clients l'ignorent (default case du switch)
+- Version du schéma : 2 (compatible avec SessionContext v2)
+
+**VOLUME 1 — Fix API volume_controller** :
+- `volume_controller` 3.4.4 a changé son API : constructeur → singleton, `.listener()` → `.addListener()`
+- `SystemVolumeService` mis à jour + ajout de `_volumeSub` pour cleanup propre
+- Test `VolumeChanged` corrigé pour mocker `systemVolume` au lieu de `audioEngine`
+
+---
+
+## Session du 2026-04-04 (v0.1.40) — Fix CRASH-12 (ink_sparkle shader)
+
+### Contexte
+CRASH-12 : `Asset 'shaders/ink_sparkle.frag' not found` — 9 events FATAL, 2 users, 6 sessions. Flutter 3.27+ utilise `InkSparkle` comme splash factory par défaut sur Android, qui nécessite un shader non inclus dans le build.
+
+### Modifications
+
+| # | Catégorie | Description | Fichiers |
+|---|-----------|-------------|----------|
+| 1 | `FIX` | **CRASH-12** `splashFactory: InkSplash.splashFactory` ajouté dans tous les `ThemeData` de `main.dart` (6 occurrences : 3 blocs × light/dark) | `main.dart` |
+| 2 | `CHORE` | Version sync `0.1.39+39` → `0.1.40+40` | `pubspec.yaml`, `app_constants.dart` |
+| 3 | `TEST` | Tests unitaires : 206/206 passent (zéro régression) | — |
+
+### Détails techniques
+
+**CRASH-12 — Shader ink_sparkle.frag manquant** :
+- Flutter 3.27+ utilise `InkSparkle` (effet sparkle sur les ripples Material 3) par défaut sur Android
+- Ce shader n'est pas automatiquement inclus dans les builds Android release
+- Résultat : crash FATAL quand un widget avec ripple/progress est rendu
+- Fix : `splashFactory: InkSplash.splashFactory` remplace InkSparkle par le ripple classique (pas de shader requis)
+- Impact visuel : ripple légèrement moins "brillant" mais fonctionnellement identique
+- Alternative rejetée : déclarer le shader dans `pubspec.yaml` sous `shaders:` — plus risqué (chemin du shader peut varier selon la version Flutter)
+
+---
+
 ## Session du 2026-04-03 (v0.1.29) — Fixes P2 (withOpacity, allGuestsReady, join notification)
 
 ### Contexte

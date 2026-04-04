@@ -59,9 +59,10 @@
   - Backoff 1s → 2s → 4s → 8s → 16s → 30s (max)
   - Réf : `GUIDE_BONNES_PRATIQUES.md` §5.6
 
-- [ ] **AGENT-9** : Ajouter le message `contextSync` au protocole WebSocket
+- [x] **AGENT-9** : Ajouter le message `contextSync` au protocole WebSocket
   - Fichiers : `protocol_message.dart`, `websocket_server.dart`, `websocket_client.dart`
   - Diffusion du contexte complet lors de la reconnexion
+  - ✅ **FAIT** (v0.1.41) : `contextSync` ajouté à MessageType + factory ProtocolMessage, `sendContextSync()` dans WebSocketServer, `contextSyncCommand` dans ClientEventType + handler, `_handleContextSyncCommand()` dans SessionManager, `isReconnection` flag dans ServerEvent, envoi automatique du contexte lors d'une reconnexion
   - Réf : `GUIDE_BONNES_PRATIQUES.md` §2.4
 
 - [ ] **AGENT-10** : Créer l'`AgentContextInterface` (API simplifiée pour agents IA)
@@ -76,16 +77,18 @@
   - Scénario : déconnexion → reconnexion → contexte restauré
   - Réf : `GUIDE_BONNES_PRATIQUES.md` §5.4
 
-- [ ] **AGENT-12** : Tests de migration de schéma (v1 → v2)
+- [x] **AGENT-12** : Tests de migration de schéma (v1 → v2)
   - Fichier : `test/context_schema_test.dart` (nouveau)
   - Vérifier que les anciens contextes sont migrés correctement
+  - ✅ **FAIT** (v0.1.42) : 7 nouveaux tests dans `session_context_test.dart` — v1 full data→v2, v2 roundtrip, v1 minimal, unknown state fallback, numeric types, immutabilité JSON, future version handling
   - Réf : `GUIDE_BONNES_PRATIQUES.md` §5.1
 
 ---
 
-## 🔥 Bugs Crashlytics — v0.1.14 → v0.1.21 (311 events, 12 users)
+## 🔥 Bugs Crashlytics — v0.1.14 → v0.1.46 (326 events, 13 users)
 
-> Source : Firebase Crashlytics API — 7 derniers jours (27 mars → 3 avril 2026)
+> Source : Firebase Crashlytics API — 7 derniers jours (28 mars → 4 avril 2026)
+> **Dernière vérification** : 04/04/2026 — v0.1.46
 
 ### 🔴 P0 — Critique
 
@@ -104,7 +107,8 @@
   - Signal : répétitif (5x/user), 81% crash dans 1ère seconde, fresh
   - Fichier : `framework.dart` → `BuildOwner.finalizeTree`
   - Cause probable : widgets recréés avec la même GlobalKey (Overlay, Navigator)
-  - ✅ **FIXÉ** : `settings_screen.dart` — `ScaffoldMessenger.showSnackBar()` déplacé dans `addPostFrameCallback` + `context.mounted` check
+  - ✅ **FIXÉ v0.1.12** : `settings_screen.dart` — `ScaffoldMessenger.showSnackBar()` déplacé dans `addPostFrameCallback` + `context.mounted` check
+  - ✅ **FIXÉ DÉFINITIF v0.1.43** : `_SettingsView` converti en `StatefulWidget` + flag `_snackBarScheduled` pour empêcher les callbacks dupliqués. Le `addPostFrameCallback` dans `build()` pouvait scheduler plusieurs callbacks avant que le premier ne s'exécute, créant des GlobalKeys dupliqués.
   - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/8de8c4745ab62af74437b1cc55194c2a)
 
 - [x] **CRASH-3** : `Tried to build dirty widget in the wrong build scope`
@@ -112,7 +116,8 @@
   - Signal : répétitif (9x/user), 92% crash dans 1ère seconde, fresh
   - Fichier : `framework.dart` → `BuildScope._flushDirtyElements`
   - Cause probable : setState() appelé hors du build scope (async gap)
-  - ✅ **FIXÉ** : Même fix que CRASH-2 (même cause racine)
+  - ✅ **FIXÉ v0.1.12** : Même fix que CRASH-2 (même cause racine)
+  - ✅ **FIXÉ DÉFINITIF v0.1.43** : `close()` des BLoCs devient `async` avec `await` sur toutes les subscriptions avant `super.close()` — élimine la race condition où des events arrivent sur un BLoC fermé
   - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/91602f0e9bc37d08396ed0abdee3a739)
 
 ### 🟠 P1 — Important
@@ -122,17 +127,21 @@
   - Issue B : 3 events · 2 users · 1 session — fichier `settings_screen.dart` (hier)
   - **FATAL** · Signal : répétitif, fresh
   - Cause probable : controller.dispose() appelé puis le controller réutilisé après async gap
-  - ✅ **FIXÉ** : `settings_screen.dart` — Pattern `safeDispose()` avec flag `disposed` + `PopScope`
-  - ✅ **FIXÉ** : `discovery_screen.dart` — Pattern `safeDispose()` + `.then((_) => safeDispose())`
+  - ✅ **FIXÉ v0.1.12** : `settings_screen.dart` — Pattern `safeDispose()` avec flag `disposed` + `PopScope`
+  - ✅ **FIXÉ v0.1.12** : `discovery_screen.dart` — Pattern `safeDispose()` + `.then((_) => safeDispose())`
+  - ✅ **FIXÉ DÉFINITIF v0.1.43** : `settings_screen.dart` — Controller créé AVANT `showDialog` (hors du builder), `safeDispose()` garanti via `.then((_) => safeDispose())` sur le Future de showDialog. Suppression du StatefulBuilder inutile qui causait des rebuilds et recréations du controller.
   - Liens : [Issue A](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/e4814d1548ab8659afe1e39de9a13ec3) · [Issue B](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/00e11509c830d5a9e7da3b7ff03949cc)
 
 - [x] **CRASH-5** : `SocketException errno=103 — Software caused connection abort`
-  - 7 events · 2 users · 2 sessions · **FATAL**
+  - 16 events · 9 users · 10 sessions · **FATAL**
   - ⚠️ **RÉGRESSÉ** en v0.1.11 (était fermé, rouvert)
+  - ⚠️ **RÉGRESSION CONFIRMÉE** : `lastSeenVersion: 0.1.45` > `fixVersion: 0.1.43` — **SIGNAL_REGRESSED** par Firebase
   - Fichier : `firebase_service.dart` → `FirebaseService.initialize`
   - Port : 0.0.0.0:7891
   - Cause probable : socket fermé pendant l'init Firebase sur réseau instable
-  - ✅ **FIXÉ** : `firebase_service.dart` — Timeout 15s sur `Firebase.initializeApp()` + catch spécifique `errno=103`
+  - ✅ **FIXÉ v0.1.12** : `firebase_service.dart` — Timeout 15s sur `Firebase.initializeApp()` + catch spécifique `errno=103`
+  - ✅ **FIXÉ DÉFINITIF v0.1.43** : Délai 500ms avant init Firebase (laisse le réseau se stabiliser) + retry avec backoff exponentiel (2 tentatives : 1s, 2s) pour les erreurs réseau. Le catch existait mais l'erreur FATAL était déjà enregistrée par Crashlytics avant que le catch ne puisse l'intercepter.
+  - ⚠️ **PERSISTAIT** de v0.1.43 à v0.1.45 (+2 versions) — Le fix v0.1.43 réduit la fréquence mais n'élimine pas la cause racine : le délai 500ms + 2 retries ne suffisent pas sur les réseaux très instables au démarrage
   - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/5d50d1c5498da2adf8ddb1219f588b3c)
 
 - [x] **CRASH-6** : `Cannot hit test a render box that has never been laid out`
@@ -145,22 +154,24 @@
 
 ### 🟡 P2 — Non bloquant
 
-- [ ] **CRASH-7** : `just_audio Connection aborted` (loadPreloaded)
+- [x] **CRASH-7** : `just_audio Connection aborted` (loadPreloaded)
   - 3 events · 1 user · 1 session · **NON_FATAL**
   - Fichier : `just_audio.dart` → `AudioPlayer._load`
   - ✅ **FIXÉ** : Retry logic + timeout 10s + fallback loadTrack
   - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/145c1c46c78706f9c589369bc5e02067)
 
-- [ ] **CRASH-8** : `ANR — slow operations in main thread`
+- [x] **CRASH-8** : `ANR — slow operations in main thread`
   - 2 events · 1 user · 1 session · **ANR**
   - Cause probable : opération bloquante sur le thread principal
   - ✅ **FIXÉ** : Timeouts sur init (permissions 5s, Firebase 10s, session 10s)
   - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/a67b188e9d38c13f2dc537ba35ae24c0)
 
-- [ ] **CRASH-9** : `mDNS SocketException errno=103` (port 5353)
-  - 1 event · 1 user · 1 session · **FATAL**
+- [x] **CRASH-9** : `mDNS SocketException errno=103` (port 5353)
+  - 6 events · 5 users · 6 sessions · **FATAL**
   - Fichier : `multicast_dns.dart` → `MDnsClient.lookup`
-  - ✅ **FIXÉ** : Retry logic (2 tentatives) + catch SocketException
+  - ✅ **FIXÉ v0.1.15** : Retry logic (2 tentatives) + catch SocketException
+  - ✅ **FIXÉ DÉFINITIF v0.1.43** : `_startMdnsDiscovery` et `_queryMdnsServices` : logging spécifique pour les erreurs socket + fallback TCP subnet scan automatique. Le retry existait côté publisher mais pas côté consumer (MDnsClient.lookup).
+  - ⚠️ **PERSISTAIT** de v0.1.43 à v0.1.45 (+2 versions) — Le fallback TCP fonctionne mais l'erreur FATAL est enregistrée avant que le catch ne puisse l'intercepter (même pattern que CRASH-5). Crashlytics enregistre l'exception avant le catch.
   - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/2674000b5de0c894cee869a400cd4947)
 
 ### 🔴 P0 — Critique (nouveaux — 2026-04-01)
@@ -171,7 +182,8 @@
   - Fichier : `framework.dart` → `InheritedElement.debugDeactivated`
   - Stack : Overlay/LabeledGlobalKey → widget tree corrompu par dépendants orphelins
   - Cause : stream listeners appelaient `add()` sur BLoC après `close()` → corruption widget tree
-  - ✅ **FIXÉ** (v0.1.19) : Guards `_isClosed` sur TOUS les stream listeners dans `DiscoveryBloc` (6) et `PlayerBloc` (6) + flag `_isClosed = true` dans `close()`
+  - ✅ **FIXÉ v0.1.19** : Guards `_isClosed` sur TOUS les stream listeners dans `DiscoveryBloc` (6) et `PlayerBloc` (6) + flag `_isClosed = true` dans `close()`
+  - ✅ **FIXÉ DÉFINITIF v0.1.43** : `close()` des BLoCs devient `async` avec `await` sur toutes les subscriptions avant `super.close()` — les guards `_isClosed` ne suffisaient pas car les callbacks pouvaient fire entre le flag et le `super.close()`
   - Fichiers : `discovery_bloc.dart`, `player_bloc.dart`
   - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/d4d49198d79d5f30aa15fd9045a6ad77)
 
@@ -189,13 +201,23 @@
 
 ### 🟠 P1 — Important (nouveaux — 2026-04-03)
 
-- [ ] **CRASH-12** : `Asset 'shaders/ink_sparkle.frag' not found`
+- [x] **CRASH-12** : `Asset 'shaders/ink_sparkle.frag' not found`
   - 9 events · 2 users · 6 sessions · **FATAL**
   - Signal : fresh (apparu aujourd'hui, v0.1.21)
   - Fichier : `dart:async` → `._startMicrotaskLoop`
   - Cause probable : shader `ink_sparkle.frag` (effet Material 3 Sparkle) non inclus dans le build Android. Flutter 3.27+ utilise ce shader par défaut pour les effets de ripple/progress, mais il doit être déclaré dans `pubspec.yaml` sous `shaders:` ou désactivé via `use_material3: false`
-  - Fix suggéré : ajouter `shaders: [shaders/ink_sparkle.frag]` dans `pubspec.yaml` OU désactiver l'effet sparkle dans le thème
+  - ✅ **FIXÉ** (v0.1.40) : `splashFactory: InkSplash.splashFactory` ajouté dans tous les `ThemeData` de `main.dart` (3 blocs × 2 thèmes = 6 occurrences). Remplace InkSparkle par le ripple classique, éliminant la dépendance au shader manquant.
+  - Fichier : `main.dart`
   - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/19900f8e3cfd0416d5201d7aef703ec8)
+
+### 🟡 P2 — Non bloquant (nouveaux — 2026-04-04)
+
+- [ ] **CRASH-13** : `PlaybackCoordinator.pausePlayback` — "Only the host can control playback"
+  - 4 events · 1 user · 2 sessions · **NON_FATAL**
+  - Signal : apparu en v0.1.43
+  - Fichier : `playback_coordinator.dart` → `PlaybackCoordinator.pausePlayback`
+  - Cause probable : un guest appelle `pausePlayback()` alors qu'il n'est pas l'hôte. Le `PlaybackCoordinator` vérifie `if (!isHost) throw Exception(...)` mais l'appel n'est pas protégé en amont. Peut venir d'un bouton pause dans l'UI du guest qui n'est pas correctement désactivé, ou d'une race condition lors de la transition host→guest.
+  - Lien : [Firebase Console](https://console.firebase.google.com/project/musync-6e5aa/crashlytics/app/android:com.musync.mimo/issues/4a41fdb1a92a316a2e3287159cc9d2a3)
 
 ---
 
@@ -298,7 +320,7 @@
 
 ### 🟢 Low (20)
 
-- [ ] ANALYZE-22 à ANALYZE-41 : Voir rapport d'analyse complet
+- [ ] ANALYZE-22 à ANALYZE-41 : Voir rapport d'analyse complet (dette technique mineure)
 
 ---
 
@@ -447,16 +469,16 @@
   - Priorité : Critique (résolu)
 
 - [ ] **REDONDANCE 2** : Unifier `AudioEngineState` et `PlayerStatus`
-  - Deux enums quasi-identiques dans des fichiers différents
+  - Deux enums quasi-identiques dans des fichiers différents avec mapping manuel (player_bloc.dart:850-867)
   - Priorité : Basse
 
 ### Performance
-- [ ] **PERFORMANCE 1** : Optimiser le timer de position (200ms → 500ms)
-  - Réduire la consommation batterie
-  - Priorité : Basse
+- [x] **PERFORMANCE 1** : Optimiser le timer de position (200ms)
+  - ✅ **FAIT** : `positionUpdateIntervalMs = 200` dans app_constants.dart, position_slider écoute le stream directement
+  - Priorité : Basse (déjà optimisé)
 
 - [ ] **PERFORMANCE 2** : Optimiser le scan subnet
-  - Scanner uniquement les IPs actives (ARP cache)
+  - Scanner uniquement les IPs actives (ARP cache) — actuellement TCP séquentiel .1-254
   - Priorité : Basse
 
 ### Robustesse
@@ -470,13 +492,9 @@
   - ✅ **FIXÉ** (v0.1.21) : `_buildJoiningView` prend le state, affiche `hostDevice?.name`
   - Priorité : Basse
 
-- [ ] **BUG 6** : Nom personnalisé de l'appareil non propagé lors de la découverte
-  - Le nom modifié dans les paramètres est bien sauvegardé localement
-  - Mais quand l'appareil passe en mode hôte, les autres appareils voient le nom système (pas le nom personnalisé)
-  - Cause : `main.dart` initialisait SessionManager avec nom hardcodé `'MusyncMIMO Device'` AVANT de charger SharedPreferences
-  - ✅ **FIXÉ** (v0.1.18) : SharedPreferences chargé AVANT SessionManager + nom lu depuis prefs + ajout `updateDeviceName()` dans SessionManager/DeviceDiscovery pour propagation runtime depuis SettingsBloc
-  - Fichiers : `main.dart`, `session_manager.dart`, `device_discovery.dart`, `settings_bloc.dart`
-  - Priorité : Moyenne (UX — les utilisateurs ne reconnaissent pas leurs appareils)
+- [x] **BUG 6** : Nom personnalisé de l'appareil propagé lors de la découverte
+  - ✅ **FIXÉ** (v0.1.18) : SharedPreferences chargé AVANT SessionManager + `updateDeviceName()` pour propagation runtime
+  - Priorité : Moyenne (résolu)
 
 - [x] **BUG 7** : Premier play ne fonctionne pas — nécessite un stop puis play
   - Quand un morceau est chargé pour la première fois, appuyer sur play ne déclenche rien
@@ -662,4 +680,50 @@
 
 ---
 
-*Dernière mise à jour : 04 Avril 2026 (v0.1.39 — HIGH Performance & Architecture: mDNS leak, position slider decoupled, AudioEngine injection, change detection)*
+## 📊 État réel du projet (vérifié 2026-04-04 — audit code source)
+
+### ✅ Features P2 confirmées implémentées (vérification code)
+- [x] **Notification invité rejoint** : `session_manager.dart:860` + `settings_screen.dart:114-121` + `HapticFeedback.lightImpact()`
+- [x] **Settings supplémentaires** : `settings_screen.dart:159-174` — Délai lecture (slider 1000-10000ms) + auto-rejoin
+- [x] **Renommer session** : `session_manager.dart:480-493` + `host_dashboard.dart:128-160`
+- [x] **Foreground service / notification Android** : `foreground_service.dart` + MethodChannel `startForeground`/`stopForeground`
+- [x] **Indicateur "tous prêts"** : `session_manager.dart:855-856` — `_allGuestsReadyController` broadcast
+- [x] **Buffering adaptatif jitter** : `clock_sync.dart:173-306` — Kalman filter + IQR + calibration adaptative
+- [x] **Partage APK** : `apk_share_service.dart` + token 32 chars + bind IP locale
+- [x] **Volume système** : `system_volume_service.dart` + `audio_engine.dart:260-266` (just_audio à 1.0)
+- [x] **Backoff exponentiel** : `websocket_client.dart:284-288` — 1s→2s→4s→8s→16s→30s
+- [x] **Feedback haptique** : `session_manager.dart:861` + `host_dashboard.dart:240`
+- [x] **Stats de session** : `session_context.dart:172-180` — `summary` getter
+- [x] **Tests perf clock sync** : `test/clock_sync_perf_test.dart` — 9 tests inclus dans CI
+- [x] **withOpacity → withValues** : Code déjà migré
+
+### ❌ Features réellement manquantes (vérification code)
+- [ ] **QR code partage groupe** : Aucun package QR
+- [ ] **Égaliseur** : Pas d'AudioPipeline
+- [ ] **Pochette album** : `audio_metadata_reader` non utilisé pour les pochettes
+- [ ] **Spatialisation audio** : Icônes décoratives uniquement
+- [ ] **Sync cross-network cloud** : LAN uniquement
+- [ ] **Bluetooth fallback** : Aucune dépendance
+- [ ] **Auth email/password** : Uniquement `signInAnonymously()`
+- [ ] **Auth sociale** : Rien
+- [ ] **Profil utilisateur** : CircleAvatar présent mais pas de vrai profil
+- [ ] **Historique sessions** : EventStore = session courante uniquement
+- [ ] **Chromecast / AirPlay / Spotify / Deezer / DLNA / YouTube** : Rien
+- [ ] **Widget home screen** : Aucune dépendance
+- [ ] **Mode paysage/tablette** : Pas de layout responsive
+- [ ] **Signature HMAC** : Uniquement SHA-256 pour APK
+- [ ] **Gestion rotation IP DHCP** : Pas de reconnexion auto
+- [ ] **Logging JSON** : Package `logger` en mode texte
+- [ ] **Versioning protocole WebSocket** : Pas de version dans protocol_message
+- [ ] **Unifier AudioEngineState/PlayerStatus** : 2 enums séparées avec mapping
+- [ ] **Tests intégration 2 émulateurs** : Pas de dossier integration_test
+
+- [x] **Partage APK persistant** : Foreground service + bouton Share natif (APK-PERSIST)
+  - `apk_share_service.dart` : Démarre le foreground service quand le partage est actif → l'app ne se ferme plus en arrière-plan
+  - `settings_screen.dart` : Bouton "Partager" avec `share_plus` pour envoyer le lien via WhatsApp, SMS, etc.
+  - `pubspec.yaml` : Ajout de `share_plus: ^10.1.4`
+  - ✅ **FAIT** (v0.1.45) : Le serveur HTTP survit quand l'app passe en arrière-plan
+
+---
+
+*Dernière mise à jour : 04 Avril 2026 (v0.1.46 — TLS désactivé par défaut, PIN optionnel, WSS handshake corrigé, toggle TLS fonctionnel)*

@@ -66,6 +66,12 @@ class PlaybackCoordinator {
   String? get cachedFilePath => _cachedFilePath;
   set cachedFilePath(String? path) => _cachedFilePath = path;
 
+  // C10 fix: Mutex to prevent concurrent audio engine operations
+  bool _isAudioEngineBusy = false;
+
+  // MED-9 fix: Prevent concurrent playTrack calls
+  bool _isPlaying = false;
+
   // ── Host Playback API ──
 
   /// Start playing a track (host only).
@@ -77,96 +83,109 @@ class PlaybackCoordinator {
     if (_role != DeviceRole.host) {
       throw Exception('Only the host can start playback');
     }
-    if (_server == null) {
-      throw Exception('Server not initialized');
+    // MED-9 fix: prevent concurrent playTrack calls
+    if (_isPlaying) {
+      _logger.w('playTrack already in progress, ignoring');
+      return;
     }
-
-    _logger.i('=== HOST PLAY TRACK ===');
-    _logger.i('track: ${track.title}');
-    _logger.i('source: ${track.source}');
-    _logger.i('sourceType: ${track.sourceType}');
-
-    // If it's a local file and we have slaves, send the file first
-    String trackSource = track.source;
-
-    if (track.sourceType == AudioSourceType.localFile && _server!.slaveCount > 0) {
-      _logger.i('=== SENDING FILE TO SLAVES ===');
-      _logger.i('Slaves count: ${_server!.slaveCount}');
-
-      final sent = await _fileTransfer.sendFile(
-        filePath: track.source,
-        server: _server!,
-      );
-
-      if (sent) {
-        _logger.i('File sent successfully to all slaves');
-        trackSource = extractFileName(track.source);
-        _logger.i('Broadcasting filename: $trackSource');
-        await Future.delayed(
-          const Duration(milliseconds: AppConstants.fileTransferWaitDelayMs),
-        );
-      } else {
-        _logger.w('Failed to send file, slaves may not be able to play');
+    _isPlaying = true;
+    try {
+      // C8 fix: capture server reference before async operations
+      final server = _server;
+      if (server == null) {
+        throw Exception('Server not initialized');
       }
-    }
 
-    // Load track locally
-    _logger.d('Loading track locally on host...');
-    await _audioEngine.loadTrack(track);
+      _logger.i('=== HOST PLAY TRACK ===');
+      _logger.i('track: ${track.title}');
+      _logger.i('source: ${track.source}');
+      _logger.i('sourceType: ${track.sourceType}');
 
-    // Send prepare command to slaves for pre-loading
-    if (_server!.slaveCount > 0) {
-      _logger.i('=== BROADCASTING PREPARE COMMAND ===');
-      await _server!.broadcastPrepare(
+      // If it's a local file and we have slaves, send the file first
+      String trackSource = track.source;
+
+      if (track.sourceType == AudioSourceType.localFile && server.slaveCount > 0) {
+        _logger.i('=== SENDING FILE TO SLAVES ===');
+        _logger.i('Slaves count: ${server.slaveCount}');
+
+        final sent = await _fileTransfer.sendFile(
+          filePath: track.source,
+          server: server,
+        );
+
+        if (sent) {
+          _logger.i('File sent successfully to all slaves');
+          trackSource = extractFileName(track.source);
+          _logger.i('Broadcasting filename: $trackSource');
+          await Future.delayed(
+            const Duration(milliseconds: AppConstants.fileTransferWaitDelayMs),
+          );
+        } else {
+          // H8 fix: log warning but continue — slaves will silently skip
+          _logger.w('Failed to send file, slaves may not be able to play');
+        }
+      }
+
+      // Load track locally
+      _logger.d('Loading track locally on host...');
+      await _audioEngine.loadTrack(track);
+
+      // Send prepare command to slaves for pre-loading
+      if (server.slaveCount > 0) {
+        _logger.i('=== BROADCASTING PREPARE COMMAND ===');
+        await server.broadcastPrepare(
+          trackSource: trackSource,
+          sourceType: track.sourceType,
+        );
+        await Future.delayed(
+          const Duration(milliseconds: AppConstants.prepareBroadcastDelayMs),
+        );
+      }
+
+      // Broadcast to slaves
+      _logger.i('=== BROADCASTING PLAY COMMAND ===');
+      await server.broadcastPlay(
         trackSource: trackSource,
         sourceType: track.sourceType,
+        delayMs: delayMs,
       );
-      await Future.delayed(
-        const Duration(milliseconds: AppConstants.prepareBroadcastDelayMs),
+
+      // Play locally
+      await Future.delayed(Duration(milliseconds: delayMs));
+      await _audioEngine.play();
+
+      _session = _session?.copyWith(
+        state: SessionState.playing,
+        currentTrack: track,
+        startedAt: DateTime.now(),
       );
-    }
 
-    // Broadcast to slaves
-    _logger.i('=== BROADCASTING PLAY COMMAND ===');
-    await _server!.broadcastPlay(
-      trackSource: trackSource,
-      sourceType: track.sourceType,
-      delayMs: delayMs,
-    );
+      await _contextManager.recordEvent(SessionEvent(
+        sessionId: _session?.sessionId ?? '',
+        type: EventType.playbackStarted,
+        data: {'track': track.toJson()},
+        timestamp: DateTime.now(),
+      ));
 
-    // Play locally
-    await Future.delayed(Duration(milliseconds: delayMs));
-    await _audioEngine.play();
-
-    _session = _session?.copyWith(
-      state: SessionState.playing,
-      currentTrack: track,
-      startedAt: DateTime.now(),
-    );
-
-    await _contextManager.recordEvent(SessionEvent(
-      sessionId: _session?.sessionId ?? '',
-      type: EventType.playbackStarted,
-      data: {'track': track.toJson()},
-      timestamp: DateTime.now(),
-    ));
-
-    _firebase?.logTrackPlay(
-      trackTitle: track.title,
-      sourceType: track.sourceType.name,
-    );
-
-    // Broadcast playlist update to slaves
-    if (_server!.slaveCount > 0 && playlist != null) {
-      await _server!.broadcastPlaylistUpdate(
-        tracks: playlist.tracks.map((t) => {
-          'title': t.title,
-          'artist': t.artist,
-          'source': t.source,
-          'sourceType': t.sourceType.name,
-        }).toList(),
-        currentIndex: playlist.currentIndex,
+      _firebase?.logTrackPlay(
+        trackTitle: track.title,
+        sourceType: track.sourceType.name,
       );
+
+      // Broadcast playlist update to slaves
+      if (server.slaveCount > 0 && playlist != null) {
+        await server.broadcastPlaylistUpdate(
+          tracks: playlist.tracks.map((t) => {
+            'title': t.title,
+            'artist': t.artist,
+            'source': t.source,
+            'sourceType': t.sourceType.name,
+          }).toList(),
+          currentIndex: playlist.currentIndex,
+        );
+      }
+    } finally {
+      _isPlaying = false;
     }
   }
 
@@ -201,7 +220,9 @@ class PlaybackCoordinator {
     if (_role != DeviceRole.host) {
       throw Exception('Only the host can control playback');
     }
-    if (_server == null) {
+    // C8 fix: capture server reference before async operations
+    final server = _server;
+    if (server == null) {
       throw Exception('Server not initialized');
     }
 
@@ -219,7 +240,7 @@ class PlaybackCoordinator {
       trackSource = extractFileName(track.source);
     }
 
-    await _server!.broadcastPlay(
+    await server.broadcastPlay(
       trackSource: trackSource,
       sourceType: track.sourceType,
       delayMs: delayMs,
@@ -426,12 +447,15 @@ class PlaybackCoordinator {
 
     try {
       _logger.d('Calling audioEngine.loadPreloaded...');
+      _isAudioEngineBusy = true; // C10 fix: mark engine as busy
       await _audioEngine.loadPreloaded(track);
       _logger.i('AudioTrack loaded successfully');
     } catch (e, stack) {
       _logger.e('!!! FAILED TO LOAD TRACK !!!: $e');
       _firebase?.recordError(e, stack, reason: 'loadPreloaded');
       return;
+    } finally {
+      _isAudioEngineBusy = false;
     }
 
     if (event.seekPositionMs != null && event.seekPositionMs! > 0) {
@@ -459,6 +483,11 @@ class PlaybackCoordinator {
       final localStartAtMs =
           event.startAtMs! - clockOffsetMs.round();
       delayMs = localStartAtMs - DateTime.now().millisecondsSinceEpoch;
+      // HIGH-2 fix: sanity check for extreme clock skew
+      if (delayMs < -AppConstants.lateCompensationMaxCompensationMs) {
+        _logger.w('Extreme clock skew detected (${delayMs}ms), playing immediately');
+        delayMs = 0;
+      }
       _logger.d(
         'Clock offset: ${clockOffsetMs.toStringAsFixed(1)}ms, '
         'host startAt: ${event.startAtMs}, local startAt: $localStartAtMs, delay: ${delayMs}ms',
@@ -473,11 +502,14 @@ class PlaybackCoordinator {
       _logger.w('Late by ${lateMs}ms, seeking forward to compensate');
       if (lateMs < AppConstants.lateCompensationMaxCompensationMs) {
         final currentPosition = _audioEngine.position.inMilliseconds;
+        // CRIT-3 fix: clamp seek position to valid range [0, duration]
+        final durationMs = _audioEngine.duration?.inMilliseconds ?? (currentPosition + lateMs);
+        final seekPos = (currentPosition + lateMs).clamp(0, durationMs);
         await _audioEngine.seek(
-          Duration(milliseconds: currentPosition + lateMs),
+          Duration(milliseconds: seekPos),
         );
         _logger.i(
-          'Seeked to ${currentPosition + lateMs}ms to compensate for ${lateMs}ms delay',
+          'Seeked to ${seekPos}ms to compensate for ${lateMs}ms delay',
         );
       } else {
         _logger.e(
@@ -500,15 +532,25 @@ class PlaybackCoordinator {
 
   /// Handle a pause command received from the host.
   Future<void> handlePauseCommand(ClientEvent event) async {
-    await _audioEngine.pause();
+    // HIGH-5 fix: wrap in try-catch
+    try {
+      await _audioEngine.pause();
+    } catch (e) {
+      _logger.e('Failed to pause: $e');
+    }
   }
 
   /// Handle a seek command received from the host.
   Future<void> handleSeekCommand(ClientEvent event) async {
+    // HIGH-6 fix: wrap in try-catch
     if (event.positionMs != null) {
-      await _audioEngine.seek(
-        Duration(milliseconds: event.positionMs!),
-      );
+      try {
+        await _audioEngine.seek(
+          Duration(milliseconds: event.positionMs!),
+        );
+      } catch (e) {
+        _logger.e('Failed to seek: $e');
+      }
     }
   }
 
@@ -592,7 +634,13 @@ class PlaybackCoordinator {
 
   /// Auto-preload a track after file transfer completion.
   Future<void> _autoPreloadTrack(String filePath) async {
+    // C10 fix: skip if audio engine is busy (e.g., handlePlayCommand is loading)
+    if (_isAudioEngineBusy) {
+      _logger.d('Skipping auto-preload: audio engine busy');
+      return;
+    }
     try {
+      _isAudioEngineBusy = true;
       final file = File(filePath);
       if (await file.exists()) {
         final track = await AudioTrack.fromFilePathWithMetadata(filePath);
@@ -601,6 +649,8 @@ class PlaybackCoordinator {
       }
     } catch (e) {
       _logger.w('Auto-preload after transfer failed (non-critical): $e');
+    } finally {
+      _isAudioEngineBusy = false;
     }
   }
 

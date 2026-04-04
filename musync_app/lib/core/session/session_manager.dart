@@ -77,6 +77,17 @@ class SessionManager {
   // Cached file path for slave playback
   String? _cachedFilePath;
 
+  /// Runtime TLS toggle (overrides AppConstants.useTls).
+  bool _useTls = AppConstants.useTls;
+  bool get useTls => _useTls;
+
+  /// Set TLS mode at runtime. Must be called before hosting/joining.
+  void setUseTls(bool enabled) {
+    _useTls = enabled;
+    AppConstants.useTls = enabled;
+    _logger.i('TLS mode set to $enabled (will apply on next session)');
+  }
+
   // Periodic sync quality timer (slave side)
   Timer? _syncQualityTimer;
 
@@ -299,6 +310,9 @@ class SessionManager {
     _logger.i('Session PIN: ${_server!.sessionPin}'); // CRIT-002: Display for out-of-band sharing
     await _server!.start();
 
+    // Set role BEFORE wiring playback coordinator (was causing "only host can start" bug on cross-platform)
+    _role = DeviceRole.host;
+
     // CRIT-005 fix: Wire up playback coordinator
     _playback.setServer(_server);
     _playback.setSession(_currentSession);
@@ -311,8 +325,6 @@ class SessionManager {
 
     // Start publishing via mDNS
     await _discovery?.startPublishing(port: port);
-
-    _role = DeviceRole.host;
     _emitState(SessionManagerState.hosting);
 
     // Initialize context for this session
@@ -379,6 +391,10 @@ class SessionManager {
     // Connect
     final connected = await _client!.connect(localDevice: _localDevice!);
     if (!connected) {
+      // C3 fix: cancel the subscription we just added before returning
+      if (_subscriptions.isNotEmpty) {
+        await _subscriptions.removeLast().cancel();
+      }
       _client = null;
       return false;
     }
@@ -388,6 +404,9 @@ class SessionManager {
     if (!synced) {
       _logger.w('Clock sync failed, continuing anyway');
     }
+
+    // Set role BEFORE wiring playback coordinator (same fix as hostSession)
+    _role = DeviceRole.slave;
 
     // CRIT-005 fix: Wire up playback coordinator
     _playback.setClient(_client);
@@ -416,7 +435,6 @@ class SessionManager {
     // Emit sync quality
     _emitSyncQuality();
 
-    _role = DeviceRole.slave;
     _emitState(SessionManagerState.joined);
 
     // Start periodic sync quality updates
@@ -643,7 +661,7 @@ class SessionManager {
   void _handleServerEvent(ServerEvent event) {
     switch (event.type) {
       case ServerEventType.deviceConnected:
-        _logger.i('Device connected: ${event.deviceName}');
+        _logger.i('Device connected: ${event.deviceName} (reconnection: ${event.isReconnection})');
         _onGuestJoinedNotification();
         _currentSession = _currentSession?.addSlave(
           DeviceInfo(
@@ -663,6 +681,11 @@ class SessionManager {
         )));
         _checkAllGuestsReady();
         _emitState(SessionManagerState.hosting);
+
+        // AGENT-9: If this is a reconnection, send full context to restore state
+        if (event.isReconnection) {
+          unawaited(_sendContextToReconnectingSlave(event.deviceId));
+        }
         break;
       case ServerEventType.deviceDisconnected:
         _logger.i('Device disconnected: ${event.deviceName}');
@@ -748,6 +771,13 @@ class SessionManager {
         break;
       case ClientEventType.disconnected:
         _logger.i('Disconnected from host');
+        // C4 fix: full cleanup on unexpected disconnect (was missing timer/service cleanup)
+        _syncQualityTimer?.cancel();
+        _syncQualityTimer = null;
+        _recalibrationTimer?.cancel();
+        _recalibrationTimer = null;
+        unawaited(_foregroundService.stop());
+        _playback.setClient(null);
         _role = DeviceRole.none;
         _currentSession = null;
         _emitState(SessionManagerState.idle);
@@ -765,6 +795,9 @@ class SessionManager {
         break;
       case ClientEventType.volumeControlCommand:
         // Volume control is handled by PlayerBloc directly
+        break;
+      case ClientEventType.contextSyncCommand:
+        _handleContextSyncCommand(event);
         break;
     }
   }
@@ -851,6 +884,73 @@ class SessionManager {
   /// Trigger haptic feedback to notify the host that a guest has joined.
   void _onGuestJoinedNotification() {
     unawaited(HapticFeedback.lightImpact());
+  }
+
+  /// Handle full session context sync from host (AGENT-9).
+  /// Called when a slave reconnects and receives the full session state.
+  void _handleContextSyncCommand(ClientEvent event) {
+    final contextData = event.contextData;
+    if (contextData == null) {
+      _logger.w('Received contextSyncCommand with no context data');
+      return;
+    }
+
+    final state = contextData['state'] as String?;
+    final positionMs = contextData['position_ms'] as int? ?? 0;
+    final serverTimeMs = contextData['server_time_ms'] as int?;
+
+    _logger.i(
+      'Context restored: state=$state, position=${positionMs}ms, '
+      'server_time=$serverTimeMs',
+    );
+
+    // Update session state if available
+    if (state != null && _currentSession != null) {
+      try {
+        final sessionState = SessionState.values.byName(state);
+        _currentSession = _currentSession!.copyWith(state: sessionState);
+      } catch (e) {
+        _logger.w('Unknown session state: $state');
+      }
+    }
+
+    // Emit appropriate state for UI
+    switch (state) {
+      case 'playing':
+        _emitState(SessionManagerState.playing);
+        break;
+      case 'paused':
+        _emitState(SessionManagerState.paused);
+        break;
+      case 'waiting':
+        _emitState(SessionManagerState.joined);
+        break;
+      default:
+        break;
+    }
+  }
+
+  /// Send full session context to a reconnecting slave (AGENT-9, host side).
+  /// Called after a slave re-joins to restore its state without full replay.
+  Future<void> _sendContextToReconnectingSlave(String deviceId) async {
+    if (_server == null || _currentSession == null) return;
+
+    final trackJson = _currentSession!.currentTrack?.toJson();
+    final positionMs = _audioEngine.position.inMilliseconds;
+
+    await _server!.sendContextSync(
+      deviceId: deviceId,
+      sessionId: _currentSession!.sessionId,
+      state: _currentSession!.state.name,
+      currentTrack: trackJson != null
+          ? Map<String, dynamic>.from(trackJson)
+          : null,
+      positionMs: positionMs,
+      volume: 1.0, // Default volume; could be tracked per-device
+      currentIndex: 0,
+      serverTimeMs: _server!.clockSync.syncedTimeMs,
+      version: 2,
+    );
   }
 
   // ── Delegated playback handlers (CRIT-005 fix) ──

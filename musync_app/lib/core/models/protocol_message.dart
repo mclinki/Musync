@@ -51,6 +51,9 @@ enum MessageType {
 
   // Volume control
   volumeControl,      // Host broadcasts volume to slaves
+
+  // Context sync (AGENT-9)
+  contextSync,        // Host broadcasts full session context on slave reconnection
 }
 
 /// A message in the MusyncMIMO protocol.
@@ -356,6 +359,40 @@ class ProtocolMessage {
     return ProtocolMessage(
       type: MessageType.volumeControl,
       payload: {'volume': volume},
+    );
+  }
+
+  // ── Context sync (AGENT-9) ──
+
+  /// Broadcast full session context to a reconnecting slave.
+  factory ProtocolMessage.contextSync({
+    required String sessionId,
+    required String state,
+    Map<String, dynamic>? currentTrack,
+    required int positionMs,
+    required double volume,
+    List<Map<String, dynamic>>? playlistTracks,
+    required int currentIndex,
+    String? repeatMode,
+    bool? isShuffled,
+    required int serverTimeMs,
+    required int version,
+  }) {
+    return ProtocolMessage(
+      type: MessageType.contextSync,
+      payload: {
+        'session_id': sessionId,
+        'state': state,
+        if (currentTrack != null) 'current_track': currentTrack,
+        'position_ms': positionMs,
+        'volume': volume,
+        if (playlistTracks != null) 'playlist_tracks': playlistTracks,
+        'current_index': currentIndex,
+        if (repeatMode != null) 'repeat_mode': repeatMode,
+        if (isShuffled != null) 'is_shuffled': isShuffled,
+        'server_time_ms': serverTimeMs,
+        'version': version,
+      },
     );
   }
 }

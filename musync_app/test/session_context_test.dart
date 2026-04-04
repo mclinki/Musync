@@ -135,5 +135,196 @@ void main() {
       expect(ctx.currentTrack, isNull);
       expect(ctx.devices, isEmpty);
     });
+
+    // ── AGENT-12: Comprehensive schema migration tests ──
+
+    group('Schema migration', () {
+      test('v1 with full data migrates to v2 preserving all fields', () {
+        final v1Json = {
+          'version': 1,
+          'session_id': 'session-abc',
+          'state': 'playing',
+          'current_track': {
+            'title': 'My Song',
+            'artist': 'Artist',
+            'source': '/music/song.mp3',
+            'sourceType': 'localFile',
+          },
+          'position_ms': 42000,
+          'volume': 0.75,
+          'devices': [
+            {
+              'id': 'dev-1',
+              'name': 'Phone',
+              'type': 'phone',
+              'ip': '192.168.1.10',
+              'port': 7890,
+              'discoveredAt': '2026-04-01T00:00:00.000Z',
+            },
+          ],
+          'playlist': [
+            {
+              'title': 'Song 1',
+              'source': '/music/song1.mp3',
+              'sourceType': 'localFile',
+            },
+            {
+              'title': 'Song 2',
+              'source': '/music/song2.mp3',
+              'sourceType': 'localFile',
+            },
+          ],
+          'current_index': 1,
+          'created_at': '2026-04-01T10:00:00.000Z',
+          'updated_at': '2026-04-01T10:05:00.000Z',
+        };
+
+        final ctx = SessionContext.fromJson(v1Json);
+
+        // Version upgraded
+        expect(ctx.version, equals(currentContextVersion));
+        // All v1 fields preserved
+        expect(ctx.sessionId, equals('session-abc'));
+        expect(ctx.state, equals(SessionState.playing));
+        expect(ctx.currentTrack?.title, equals('My Song'));
+        expect(ctx.positionMs, equals(42000));
+        expect(ctx.volume, equals(0.75));
+        expect(ctx.devices.length, equals(1));
+        expect(ctx.devices[0].name, equals('Phone'));
+        expect(ctx.playlist.length, equals(2));
+        expect(ctx.currentIndex, equals(1));
+        // v2 fields added with defaults
+        expect(ctx.volumes, isEmpty);
+        expect(ctx.clockOffsets, isEmpty);
+      });
+
+      test('v2 roundtrip preserves data (no migration needed)', () {
+        final v2Json = {
+          'version': 2,
+          'session_id': 'session-v2',
+          'state': 'paused',
+          'position_ms': 30000,
+          'volume': 0.5,
+          'devices': [],
+          'playlist': [],
+          'current_index': 0,
+          'volumes': {'dev-1': 0.8, 'dev-2': 0.6},
+          'clock_offsets': {'dev-1': 2.5, 'dev-2': -1.3},
+          'created_at': '2026-04-02T00:00:00.000Z',
+          'updated_at': '2026-04-02T00:01:00.000Z',
+        };
+
+        final ctx = SessionContext.fromJson(v2Json);
+
+        expect(ctx.version, equals(currentContextVersion));
+        expect(ctx.sessionId, equals('session-v2'));
+        expect(ctx.state, equals(SessionState.paused));
+        expect(ctx.positionMs, equals(30000));
+        expect(ctx.volume, equals(0.5));
+        expect(ctx.volumes, equals({'dev-1': 0.8, 'dev-2': 0.6}));
+        expect(ctx.clockOffsets, equals({'dev-1': 2.5, 'dev-2': -1.3}));
+
+        // Roundtrip: toJson → fromJson should be identical
+        final roundtrip = SessionContext.fromJson(ctx.toJson());
+        expect(roundtrip.sessionId, equals(ctx.sessionId));
+        expect(roundtrip.state, equals(ctx.state));
+        expect(roundtrip.volumes, equals(ctx.volumes));
+        expect(roundtrip.clockOffsets, equals(ctx.clockOffsets));
+      });
+
+      test('v1 with missing optional fields migrates safely', () {
+        final minimalV1 = {
+          'version': 1,
+          'session_id': 'minimal',
+          'state': 'waiting',
+          'created_at': '2026-04-01T00:00:00.000Z',
+          'updated_at': '2026-04-01T00:00:00.000Z',
+        };
+
+        final ctx = SessionContext.fromJson(minimalV1);
+
+        expect(ctx.sessionId, equals('minimal'));
+        expect(ctx.state, equals(SessionState.waiting));
+        expect(ctx.positionMs, equals(0));
+        expect(ctx.volume, equals(1.0));
+        expect(ctx.devices, isEmpty);
+        expect(ctx.playlist, isEmpty);
+        expect(ctx.volumes, isEmpty);
+        expect(ctx.clockOffsets, isEmpty);
+      });
+
+      test('v1 with unknown state migrates to waiting (safe default)', () {
+        final v1Json = {
+          'version': 1,
+          'session_id': 'unknown-state',
+          'state': 'future_state_that_does_not_exist',
+          'created_at': '2026-04-01T00:00:00.000Z',
+          'updated_at': '2026-04-01T00:00:00.000Z',
+        };
+
+        final ctx = SessionContext.fromJson(v1Json);
+
+        expect(ctx.state, equals(SessionState.waiting)); // Safe fallback
+        expect(ctx.sessionId, equals('unknown-state'));
+      });
+
+      test('v1 with numeric types as strings migrates correctly', () {
+        final v1Json = {
+          'version': 1,
+          'session_id': 'numeric-test',
+          'state': 'playing',
+          'position_ms': 12345,
+          'volume': 0.9,
+          'current_index': 2,
+          'created_at': '2026-04-01T00:00:00.000Z',
+          'updated_at': '2026-04-01T00:00:00.000Z',
+        };
+
+        final ctx = SessionContext.fromJson(v1Json);
+
+        expect(ctx.positionMs, equals(12345));
+        expect(ctx.volume, equals(0.9));
+        expect(ctx.currentIndex, equals(2));
+      });
+
+      test('migration does not mutate original JSON', () {
+        final v1Json = {
+          'version': 1,
+          'session_id': 'immutable-test',
+          'state': 'waiting',
+          'created_at': '2026-04-01T00:00:00.000Z',
+          'updated_at': '2026-04-01T00:00:00.000Z',
+        };
+
+        // Parse once
+        SessionContext.fromJson(v1Json);
+
+        // Original JSON should NOT have been mutated
+        expect(v1Json.containsKey('volumes'), isFalse);
+        expect(v1Json.containsKey('clock_offsets'), isFalse);
+      });
+
+      test('future version (v3+) is handled gracefully', () {
+        final futureJson = {
+          'version': 99,
+          'session_id': 'future-session',
+          'state': 'playing',
+          'position_ms': 0,
+          'volume': 1.0,
+          'devices': [],
+          'playlist': [],
+          'current_index': 0,
+          'volumes': {},
+          'clock_offsets': {},
+          'created_at': '2026-04-01T00:00:00.000Z',
+          'updated_at': '2026-04-01T00:00:00.000Z',
+        };
+
+        // Should not crash — migration is a no-op for future versions
+        final ctx = SessionContext.fromJson(futureJson);
+        expect(ctx.sessionId, equals('future-session'));
+        expect(ctx.version, equals(currentContextVersion));
+      });
+    });
   });
 }

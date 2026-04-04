@@ -257,8 +257,12 @@ class AudioEngine {
   }
 
   /// Set volume (0.0 to 1.0).
+  /// NOTE: System volume is now handled by SystemVolumeService.
+  /// This method is kept for backward compatibility but does nothing.
+  /// just_audio volume is kept at 1.0 (max) so system volume is the only control.
   Future<void> setVolume(double volume) async {
-    await _player.setVolume(volume.clamp(0.0, 1.0));
+    // Volume is now controlled at the system level by SystemVolumeService.
+    // just_audio volume stays at 1.0 (max) — no-op here.
   }
 
   /// Dispose resources.

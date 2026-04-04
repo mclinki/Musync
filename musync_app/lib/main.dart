@@ -84,11 +84,20 @@ void main() async {
     await firebase.setCustomKey('platform', 'flutter');
   }
 
-  // 8. Run app
+  // 8. Create and initialize SystemVolumeService (VOLUME 1)
+  final systemVolume = SystemVolumeService();
+  try {
+    await systemVolume.initialize();
+  } catch (e) {
+    debugPrint('⚠️ SystemVolumeService init failed: $e');
+  }
+
+  // 9. Run app
   runApp(MusyncApp(
     sessionManager: sessionManager,
     firebaseService: firebase,
     prefs: prefs,
+    systemVolume: systemVolume,
   ));
 }
 
@@ -96,12 +105,14 @@ class MusyncApp extends StatefulWidget {
   final SessionManager sessionManager;
   final FirebaseService firebaseService;
   final SharedPreferences prefs;
+  final SystemVolumeService systemVolume;
 
   const MusyncApp({
     super.key,
     required this.sessionManager,
     required this.firebaseService,
     required this.prefs,
+    required this.systemVolume,
   });
 
   @override
@@ -135,6 +146,7 @@ class _MusyncAppState extends State<MusyncApp> {
             brightness: Brightness.light,
           ),
           useMaterial3: true,
+          splashFactory: InkSplash.splashFactory, // CRASH-12 fix: avoid ink_sparkle.frag shader
         ),
         home: const Scaffold(body: Center(child: CircularProgressIndicator())),
       );
@@ -149,6 +161,7 @@ class _MusyncAppState extends State<MusyncApp> {
             brightness: Brightness.light,
           ),
           useMaterial3: true,
+          splashFactory: InkSplash.splashFactory, // CRASH-12 fix
         ),
         darkTheme: ThemeData(
           colorScheme: ColorScheme.fromSeed(
@@ -156,6 +169,7 @@ class _MusyncAppState extends State<MusyncApp> {
             brightness: Brightness.dark,
           ),
           useMaterial3: true,
+          splashFactory: InkSplash.splashFactory, // CRASH-12 fix
         ),
         home: OnboardingScreen(onComplete: () => setState(() => _showOnboarding = false)),
       );
@@ -178,6 +192,7 @@ class _MusyncAppState extends State<MusyncApp> {
             create: (_) => PlayerBloc(
               sessionManager: widget.sessionManager,
               audioEngine: widget.sessionManager.audioEngine, // HIGH-008 fix
+              systemVolume: widget.systemVolume, // VOLUME 1
               prefs: widget.prefs,
             ),
           ),
@@ -193,6 +208,7 @@ class _MusyncAppState extends State<MusyncApp> {
                   brightness: Brightness.light,
                 ),
                 useMaterial3: true,
+                splashFactory: InkSplash.splashFactory, // CRASH-12 fix
               ),
               darkTheme: ThemeData(
                 colorScheme: ColorScheme.fromSeed(
@@ -200,6 +216,7 @@ class _MusyncAppState extends State<MusyncApp> {
                   brightness: Brightness.dark,
                 ),
                 useMaterial3: true,
+                splashFactory: InkSplash.splashFactory, // CRASH-12 fix
               ),
               themeMode: settingsState.themeMode,
               initialRoute: '/',
