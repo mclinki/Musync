@@ -331,8 +331,10 @@ class PlayerBloc extends Bloc<PlayerEvent, PlayerState> {
       if (_isClosed) return;
       add(AudioStateChanged(audioState));
       // Detect track completion: state goes to idle while we were playing
+      // Guard: only auto-advance if session is active (not during leaveSession teardown)
       if (audioState == AudioEngineState.idle &&
-          state.status == PlayerStatus.playing) {
+          state.status == PlayerStatus.playing &&
+          sessionManager.role != DeviceRole.none) {
         add(const TrackCompleted());
       }
     });

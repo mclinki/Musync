@@ -246,7 +246,13 @@ class AudioEngine {
 
   /// Stop playback and reset position.
   Future<void> stop() async {
-    await _player.stop();
+    // Guard: don't stop if already idle (prevents native crash on Windows)
+    if (_state == AudioEngineState.idle) return;
+    try {
+      await _player.stop();
+    } catch (e) {
+      _logger.w('Stop failed (non-critical): $e');
+    }
     _currentTrack = null;
     _setState(AudioEngineState.idle);
   }
