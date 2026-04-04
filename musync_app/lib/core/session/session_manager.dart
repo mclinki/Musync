@@ -300,14 +300,18 @@ class SessionManager {
     // Create session
     _currentSession = AudioSession.create(host: _localDevice!);
 
-    // Start WebSocket server
+    // Start WebSocket server (PIN disabled by default for LAN simplicity)
     _server = WebSocketServer(
       port: port,
       sessionId: _currentSession!.sessionId,
       localIp: _localIp, // HIGH-004 fix: bind to local IP
       logger: _logger,
     );
-    _logger.i('Session PIN: ${_server!.sessionPin}'); // CRIT-002: Display for out-of-band sharing
+    if (_server!.sessionPin.isNotEmpty) {
+      _logger.i('Session PIN: ${_server!.sessionPin}');
+    } else {
+      _logger.i('Session PIN: disabled (any device can join)');
+    }
     await _server!.start();
 
     // Set role BEFORE wiring playback coordinator (was causing "only host can start" bug on cross-platform)

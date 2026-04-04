@@ -3,14 +3,13 @@ import 'package:musync_mimo/core/core.dart';
 
 void main() {
   group('WebSocketServer - Session PIN', () {
-    test('generates a 6-digit PIN by default', () {
+    test('PIN is empty by default (optional auth)', () {
       final server = WebSocketServer(
         port: 7890,
         sessionId: 'test-session',
       );
 
-      expect(server.sessionPin.length, AppConstants.sessionPinLength);
-      expect(int.tryParse(server.sessionPin), isNotNull);
+      expect(server.sessionPin, isEmpty);
     });
 
     test('accepts custom PIN', () {
@@ -23,11 +22,12 @@ void main() {
       expect(server.sessionPin, '123456');
     });
 
-    test('generates valid 6-digit PINs', () {
+    test('generates valid 6-digit PINs when explicitly set', () {
       for (int i = 0; i < 10; i++) {
         final server = WebSocketServer(
           port: 7890 + i,
           sessionId: 'session$i',
+          sessionPin: WebSocketServer.generatePin(),
         );
 
         expect(server.sessionPin.length, 6);

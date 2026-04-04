@@ -46,35 +46,36 @@ class WebSocketServer {
   final Logger _logger;
   final String sessionId;
   /// Session PIN for join authentication (CRIT-002 fix).
+  /// Empty string = PIN disabled (any join accepted).
   final String sessionPin;
   /// HIGH-004 fix: Local IP to bind to (instead of anyIPv4).
   final String? localIp;
 
+  WebSocketServer({
+    required this.port,
+    required this.sessionId,
+    this.sessionPin = '', // PIN disabled by default
+    this.localIp,
+    Logger? logger,
+  })  : _logger = logger ?? Logger(),
+        clockSync = ClockSyncEngine();
+
+  // ── Private state ──
+
   HttpServer? _server;
   final Map<String, ConnectedSlave> _slaves = {};
   final StreamController<ServerEvent> _eventController = StreamController.broadcast();
-
-  // Heartbeat monitoring
   Timer? _heartbeatTimer;
   static const int _heartbeatIntervalSeconds = AppConstants.serverHeartbeatIntervalMs ~/ 1000;
   static const int _heartbeatTimeoutSeconds = AppConstants.serverHeartbeatTimeoutMs ~/ 1000;
 
-  // Clock sync for host
-  final ClockSyncEngine clockSync = ClockSyncEngine();
-
-  WebSocketServer({
-    required this.port,
-    required this.sessionId,
-    String? sessionPin,
-    this.localIp,
-    Logger? logger,
-  })  : sessionPin = sessionPin ?? _generatePin(),
-        _logger = logger ?? Logger();
+  /// Clock synchronization engine for this server.
+  final ClockSyncEngine clockSync;
 
   /// Generate a random numeric PIN for session authentication.
   /// C5 fix: Use cryptographically secure random instead of time-based.
   /// Guarantees a 6-digit PIN in range [100000, 999999].
-  static String _generatePin() {
+  static String generatePin() {
     final random = Random.secure();
     // First digit: 1-9 (no leading zero), remaining 5 digits: 0-9
     final firstDigit = random.nextInt(9) + 1;
@@ -123,7 +124,7 @@ class WebSocketServer {
 
       // Start heartbeat monitoring
       _heartbeatTimer = Timer.periodic(
-        const Duration(seconds: _heartbeatIntervalSeconds),
+        Duration(seconds: _heartbeatIntervalSeconds),
         (_) => _checkHeartbeats(),
       );
     } catch (e) {
